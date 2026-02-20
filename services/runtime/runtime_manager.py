@@ -179,7 +179,25 @@ class QFarmRuntimeManager:
 
         if action == "update":
             await self.stop_account(str(target.get("id")))
-        await self.start_account(str(target.get("id")))
+        start_error = ""
+        try:
+            await self.start_account(str(target.get("id")))
+        except Exception as e:
+            start_error = str(e)
+            self._log(
+                "系统",
+                f"账号已保存，但自动启动失败: {start_error}",
+                is_warn=True,
+                module="system",
+                event="account_start_failed",
+                accountId=str(target.get("id")),
+            )
+            self._add_account_log(
+                "start_failed",
+                f"账号保存成功，但自动启动失败: {start_error}",
+                str(target.get("id")),
+                str(target.get("name") or ""),
+            )
         return await self.get_accounts()
 
     async def delete_account(self, account_id: str | int) -> dict[str, Any]:
