@@ -1,0 +1,92 @@
+{
+  "managed_mode": {
+    "description": "是否由插件托管 qfarm Node 服务",
+    "type": "bool",
+    "default": true
+  },
+  "node_command": {
+    "description": "Node 命令路径，例如 node 或 /usr/bin/node",
+    "type": "string",
+    "default": "node"
+  },
+  "service_host": {
+    "description": "qfarm HTTP 服务地址",
+    "type": "string",
+    "default": "127.0.0.1"
+  },
+  "service_port": {
+    "description": "qfarm HTTP 服务端口",
+    "type": "int",
+    "default": 3000
+  },
+  "service_bind_host": {
+    "description": "qfarm HTTP 服务监听地址（托管模式）",
+    "type": "string",
+    "default": "127.0.0.1"
+  },
+  "disable_webui": {
+    "description": "禁用 Node WebUI，仅保留 API 供插件调用",
+    "type": "bool",
+    "default": true
+  },
+  "service_admin_password": {
+    "description": "qfarm 管理密码，留空将自动生成并持久化",
+    "type": "string",
+    "default": ""
+  },
+  "request_timeout_sec": {
+    "description": "HTTP 请求超时（秒）",
+    "type": "int",
+    "default": 15
+  },
+  "enable_image_render": {
+    "description": "是否启用文本结果图片渲染",
+    "type": "bool",
+    "default": true
+  },
+  "render_service_url": {
+    "description": "文转图服务地址",
+    "type": "string",
+    "default": "http://172.17.0.1:51234"
+  },
+  "render_timeout_sec": {
+    "description": "图片渲染请求超时（秒）",
+    "type": "int",
+    "default": 30
+  },
+  "render_healthcheck_sec": {
+    "description": "图片渲染健康检查超时（秒）",
+    "type": "int",
+    "default": 3
+  },
+  "allowed_user_ids": {
+    "description": "允许使用命令的用户白名单（静态）",
+    "type": "list",
+    "default": []
+  },
+  "allowed_group_ids": {
+    "description": "允许使用命令的群白名单（静态）",
+    "type": "list",
+    "default": []
+  },
+  "rate_limit_read_sec": {
+    "description": "同用户读命令冷却秒数",
+    "type": "float",
+    "default": 1.0
+  },
+  "rate_limit_write_sec": {
+    "description": "同用户写命令冷却秒数",
+    "type": "float",
+    "default": 2.0
+  },
+  "global_concurrency": {
+    "description": "全局并发上限",
+    "type": "int",
+    "default": 20
+  },
+  "account_write_serialized": {
+    "description": "同账号写操作是否串行化",
+    "type": "bool",
+    "default": true
+  }
+}

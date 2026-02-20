@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>QQ农场智能助手</title>
+  <link rel="stylesheet" href="style.css?v=2026021785">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+</head>
+<body>
+  <div id="login-overlay" class="login-overlay">
+    <div class="login-card">
+      <div class="login-title">登录面板</div>
+      <div class="login-sub">请输入管理密码</div>
+      <input id="login-password" class="login-input" type="password" placeholder="管理密码">
+      <div id="login-error" class="login-error"></div>
+      <button id="btn-login" class="btn btn-primary login-btn">登录</button>
+    </div>
+  </div>
+
+  <div class="app-shell">
+    <aside class="app-sidebar">
+      <div class="brand">
+        <i class="fas fa-seedling"></i>
+        <span>农场助手</span>
+      </div>
+
+      <button class="current-account" id="current-account-btn" type="button">
+        <span id="current-account-name">选择账号</span>
+        <i class="fas fa-chevron-down"></i>
+      </button>
+      <div class="account-dropdown" id="account-dropdown"></div>
+
+      <nav class="nav-list">
+        <a href="#" class="nav-item active" data-page="dashboard"><i class="fas fa-chart-pie"></i><span>概览</span></a>
+        <a href="#" class="nav-item" data-page="farm"><i class="fas fa-seedling"></i><span>农场</span></a>
+        <a href="#" class="nav-item" data-page="bag"><i class="fas fa-box-open"></i><span>背包</span></a>
+        <a href="#" class="nav-item" data-page="friends"><i class="fas fa-user-friends"></i><span>好友</span></a>
+        <a href="#" class="nav-item" data-page="accounts"><i class="fas fa-users-cog"></i><span>账号</span></a>
+        <a href="#" class="nav-item" data-page="analytics"><i class="fas fa-flask"></i><span>分析</span></a>
+        <a href="#" class="nav-item" data-page="settings"><i class="fas fa-sliders-h"></i><span>设置</span></a>
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="conn"><span id="conn-dot" class="dot offline"></span><span id="conn-text">未连接</span></div>
+        <div id="uptime" class="uptime-mini">--</div>
+        <div id="sys-time" class="system-time">--:--:--</div>
+      </div>
+    </aside>
+
+    <main class="app-main">
+      <header class="topbar">
+        <h1 id="page-title">概览</h1>
+        <div class="topbar-actions">
+          <button id="btn-refresh" class="icon-btn" title="刷新"><i class="fas fa-sync-alt"></i></button>
+          <button id="btn-theme" class="icon-btn" title="切换主题"><i class="fas fa-moon"></i></button>
+        </div>
+      </header>
+
+      <section class="page-wrap">
+        <div id="page-dashboard" class="page active">
+          <div class="card compact-status">
+            <div class="status-item status-account-item">
+              <div class="status-account" id="topbar-account">
+                <img id="topbar-account-avatar" alt="账号头像" referrerpolicy="no-referrer" style="display:none">
+                <span id="topbar-account-fallback">未</span>
+                <div class="status-account-meta">
+                  <span id="topbar-account-name">未选择账号</span>
+                  <span id="topbar-account-status">未登录</span>
+                </div>
+              </div>
+            </div>
+            <div class="status-item runtime-item">
+              <div class="status-head"><i class="fas fa-clock si time"></i><span class="k">运行时长</span></div>
+              <span id="stat-uptime" class="v">0:00</span>
+            </div>
+            <div class="status-item">
+              <div class="status-head"><i class="fas fa-flask si total"></i><span class="k">化肥容器</span></div>
+              <div class="status-dual-row">
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-flask si total"></i><span class="k">普通</span></div>
+                  <span id="fert-normal-hours" class="v">0.0h</span>
+                </div>
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-vial si total"></i><span class="k">有机</span></div>
+                  <span id="fert-organic-hours" class="v">0.0h</span>
+                </div>
+              </div>
+            </div>
+            <div class="status-item">
+              <div class="status-head"><i class="fas fa-star si total"></i><span class="k">收藏点</span></div>
+              <div class="status-dual-row">
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-bookmark si total"></i><span class="k">普通</span></div>
+                  <span id="collect-normal" class="v">0</span>
+                </div>
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-gem si total"></i><span class="k">典藏</span></div>
+                  <span id="collect-rare" class="v">0</span>
+                </div>
+              </div>
+            </div>
+            <div class="status-item stretch gold-card">
+              <div class="status-dual-row gold-split">
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-coins si coin"></i><span class="k">金币</span></div>
+                  <span id="gold" class="v">0</span>
+                  <span id="stat-gold" class="s gain-gold">+0</span>
+                </div>
+                <div class="status-dual-col">
+                  <div class="status-head"><i class="fas fa-ticket-alt si total"></i><span class="k">点券</span></div>
+                  <span id="coupon" class="v">0</span>
+                  <span id="stat-coupon" class="s gain-gold">+0</span>
+                </div>
+              </div>
+            </div>
+            <div class="status-item stretch">
+              <div class="status-head"><i class="fas fa-bolt si exp"></i><span class="k">等级 / 经验</span></div>
+              <span id="level" class="v">Lv0</span>
+              <div class="progress progress-half"><div id="exp-fill" class="progress-fill" style="width:0%"></div></div>
+              <div class="exp-inline">
+                <span id="exp-num" class="s">0/0</span>
+                <span id="stat-exp" class="s">+0</span>
+              </div>
+              <div class="exp-meta-row">
+                <span class="s">经验效率: <span id="exp-rate">0/时</span></span>
+                <span id="time-to-level" class="s"></span>
+              </div>
+            </div>
+          </div>
+
+          <div class="dashboard-grid">
+            <div class="card logs-card">
+              <div class="card-head">
+                <h3><i class="fas fa-scroll"></i> 日志</h3>
+                <div class="log-filters">
+                  <select id="logs-account-filter" class="form-control log-filter-select"><option value="all">全部账号</option></select>
+                  <select id="logs-module-filter" class="form-control log-filter-select">
+                    <option value="">模块</option>
+                    <option value="farm">农场</option>
+                    <option value="friend">好友</option>
+                    <option value="warehouse">仓库</option>
+                    <option value="task">任务</option>
+                    <option value="system">系统</option>
+                  </select>
+                  <select id="logs-event-filter" class="form-control log-filter-select">
+                    <option value="">事件</option>
+                    <option value="farm_cycle">农场巡查</option>
+                    <option value="harvest_crop">收获作物</option>
+                    <option value="lands_notify">土地推送</option>
+                    <option value="remove_plant">清理枯株</option>
+                    <option value="seed_pick">选择种子</option>
+                    <option value="seed_buy">购买种子</option>
+                    <option value="plant_seed">种植种子</option>
+                    <option value="fertilize">施加化肥</option>
+                    <option value="friend_cycle">好友巡查</option>
+                    <option value="visit_friend">访问好友</option>
+                    <option value="sell_success">出售成功</option>
+                    <option value="upgrade_land">土地升级</option>
+                    <option value="unlock_land">土地解锁</option>
+                    <option value="task_scan">获取任务</option>
+                    <option value="task_claim">完成任务</option>
+                  </select>
+                  <select id="logs-warn-filter" class="form-control log-filter-select"><option value="">级别</option><option value="0">普通</option><option value="1">警告</option></select>
+                  <input id="logs-time-from-filter" class="form-control log-filter-input" type="datetime-local" title="开始时间">
+                  <input id="logs-time-to-filter" class="form-control log-filter-input" type="datetime-local" title="结束时间">
+                  <input id="logs-keyword-filter" class="form-control log-filter-input" type="text" placeholder="关键词（空格分词）">
+                </div>
+              </div>
+              <div class="logs-container" id="logs-list"></div>
+            </div>
+
+            <div class="side-stack">
+              <div class="card">
+                <div class="card-head"><h3><i class="fas fa-hourglass-half"></i> 下次巡查倒计时</h3></div>
+                <div class="next-checks-list" id="next-checks-list">
+                  <div class="next-check-item">
+                    <span class="label"><i class="fas fa-seedling"></i> 农场</span>
+                    <span class="value" id="next-farm-check">--</span>
+                  </div>
+                  <div class="next-check-item">
+                    <span class="label"><i class="fas fa-user-friends"></i> 好友</span>
+                    <span class="value" id="next-friend-check">--</span>
+                  </div>
+                </div>
+              </div>
+              <div class="card">
+                <div class="card-head"><h3><i class="fas fa-chart-column"></i> 统计</h3></div>
+                <div class="ops-list" id="ops-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="page-farm" class="page">
+          <div class="card">
+            <div class="card-head with-actions">
+              <h3><i class="fas fa-border-all"></i> 土地详情</h3>
+              <div class="actions-group">
+                <button class="btn btn-primary btn-sm" onclick="doFarmOp('harvest')">收获</button>
+                <button class="btn btn-sm" onclick="doFarmOp('clear')">除草/虫</button>
+                <button class="btn btn-sm" onclick="doFarmOp('plant')">种植</button>
+                <button class="btn btn-sm" onclick="doFarmOp('upgrade')">升级土地</button>
+                <button class="btn btn-sm" onclick="doFarmOp('all')">一键全收</button>
+              </div>
+            </div>
+            <div id="farm-summary" class="summary">加载中...</div>
+            <div class="farm-grid" id="farm-grid"></div>
+          </div>
+        </div>
+
+        <div id="page-bag" class="page">
+          <div class="card">
+            <div class="card-head">
+              <h3><i class="fas fa-box-open"></i> 背包物品</h3>
+            </div>
+            <div id="bag-summary" class="summary">加载中...</div>
+            <div id="bag-list" class="bag-list"></div>
+          </div>
+        </div>
+
+        <div id="page-friends" class="page">
+          <div class="card">
+            <div class="card-head"><h3><i class="fas fa-users"></i> 好友列表</h3></div>
+            <div id="friend-summary" class="summary">共 0 名好友</div>
+            <div class="friends-list" id="friends-list"></div>
+          </div>
+        </div>
+
+        <div id="page-analytics" class="page">
+          <div class="card">
+            <div class="card-head with-actions">
+              <h3><i class="fas fa-chart-line"></i> 种植效率排行</h3>
+              <select id="analytics-sort" class="form-control compact-select"><option value="exp">按经验效率</option><option value="fert">按普通肥经验效率</option><option value="profit">按净利润效率</option><option value="fert_profit">按普通肥净利润效率</option><option value="level">按等级要求</option></select>
+            </div>
+            <div id="analytics-list"></div>
+          </div>
+        </div>
+
+        <div id="page-accounts" class="page">
+          <div class="card">
+            <div class="card-head with-actions">
+              <h3><i class="fas fa-user-circle"></i> 账号列表</h3>
+              <button id="btn-add-acc-modal" class="btn btn-primary"><i class="fas fa-plus"></i> 添加账号</button>
+            </div>
+            <div id="account-summary" class="summary">共 0 个账号</div>
+            <div class="accounts-grid" id="accounts-list"></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><h3><i class="fas fa-clipboard-list"></i> 账号日志</h3></div>
+            <div class="logs-container" id="account-logs-list"></div>
+          </div>
+        </div>
+
+        <div id="page-settings" class="page">
+          <div class="settings-layout">
+            <div class="card settings-card">
+              <div class="card-head"><h3><i class="fas fa-cogs"></i> 策略设置</h3></div>
+              <div class="settings-grid">
+                <div class="form-group"><label>种植策略</label><select id="strategy-select" class="form-control"><option value="preferred">优先种植种子 (下方选择)</option><option value="level">最高等级作物</option><option value="max_exp">最大经验/时</option><option value="max_fert_exp">最大普通肥经验/时</option><option value="max_profit">最大净利润/时</option><option value="max_fert_profit">最大普通肥净利润/时</option></select></div>
+                <div class="form-group"><label>优先种植种子</label><select id="seed-select" class="form-control"><option value="0">自动选择</option></select></div>
+                <div class="form-group"><label>农场巡查间隔最小值 (秒)</label><input id="interval-farm-min" class="form-control" type="number" min="1" value="2"></div>
+                <div class="form-group"><label>农场巡查间隔最大值 (秒)</label><input id="interval-farm-max" class="form-control" type="number" min="1" value="2"></div>
+                <div class="form-group"><label>好友巡查间隔最小值 (秒)</label><input id="interval-friend-min" class="form-control" type="number" min="1" value="10"></div>
+                <div class="form-group"><label>好友巡查间隔最大值 (秒)</label><input id="interval-friend-max" class="form-control" type="number" min="1" value="10"></div>
+                <div class="form-group full"><label class="checkbox-inline"><input type="checkbox" id="friend-quiet-enabled"> 启用好友互动静默时段</label></div>
+                <div class="form-group"><label>静默开始时间</label><input id="friend-quiet-start" class="form-control" type="time" value="23:00"></div>
+                <div class="form-group"><label>静默结束时间</label><input id="friend-quiet-end" class="form-control" type="time" value="07:00"></div>
+              </div>
+            </div>
+            <div class="card" id="card-efficiency">
+              <div class="card-head"><h3><i class="fas fa-toggle-on"></i> 自动控制</h3></div>
+              <div class="switches-list">
+                <div class="switch-inline-row">
+                  <label class="switch-item switch-inline-item"><span class="switch-inline-label">自动种植收获</span><input type="checkbox" id="auto-farm"><span class="slider"></span></label>
+                  <label class="switch-item switch-inline-item"><span class="switch-inline-label">自动做任务</span><input type="checkbox" id="auto-task"><span class="slider"></span></label>
+                  <label class="switch-item switch-inline-item"><span class="switch-inline-label">自动卖果实</span><input type="checkbox" id="auto-sell"><span class="slider"></span></label>
+                </div>
+
+                <div class="switch-inline-row">
+                  <label class="switch-item switch-inline-item"><span class="switch-inline-label">自动好友互动</span><input type="checkbox" id="auto-friend"><span class="slider"></span></label>
+                  <label class="switch-item switch-inline-item"><span class="switch-inline-label">推送触发巡田</span><input type="checkbox" id="auto-farm-push"><span class="slider"></span></label>
+                  <label class="switch-item switch-inline-item"><span class="switch-inline-label">自动升级土地</span><input type="checkbox" id="auto-land-upgrade"><span class="slider"></span></label>
+                </div>
+
+                <div id="friend-sub-controls" class="friend-sub-controls">
+                  <label class="switch-item friend-sub-item"><span class="friend-sub-label">自动偷菜</span><input type="checkbox" id="auto-friend-steal"><span class="slider"></span></label>
+                  <label class="switch-item friend-sub-item"><span class="friend-sub-label">自动帮忙</span><input type="checkbox" id="auto-friend-help"><span class="slider"></span></label>
+                  <label class="switch-item friend-sub-item"><span class="friend-sub-label">自动捣乱</span><input type="checkbox" id="auto-friend-bad"><span class="slider"></span></label>
+                </div>
+
+                <div class="form-group compact">
+                  <label>施肥策略</label>
+                  <select id="fertilizer-select" class="form-control">
+                    <option value="both">普通 + 有机</option>
+                    <option value="normal">仅普通化肥</option>
+                    <option value="organic">仅有机化肥</option>
+                    <option value="none">不施肥</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="settings-actions">
+            <button id="btn-save-settings" class="btn btn-primary save-btn">保存策略与自动控制</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal" id="modal-add-acc">
+    <div class="modal-content">
+      <div class="modal-header"><h3>添加账号</h3><span class="close-modal">&times;</span></div>
+      <div class="modal-body">
+        <div class="tabs">
+          <button class="tab-btn active" data-tab="qrcode" type="button">扫码登录</button>
+          <button class="tab-btn" data-tab="manual" type="button">手动输入</button>
+        </div>
+        <div id="tab-manual" class="tab-content" style="display:none">
+          <div class="form-group"><label>备注名称</label><input id="acc-name" class="form-control" type="text" placeholder="留空默认账号X"></div>
+          <div class="form-group"><label>登录 Code</label><input id="acc-code" class="form-control" type="text" placeholder="输入获取到的 Code"></div>
+          <div class="form-group"><label>平台</label><select id="acc-platform" class="form-control"><option value="qq">QQ小程序</option><option value="wx">微信小程序</option></select></div>
+        </div>
+        <div id="tab-qrcode" class="tab-content active">
+          <div class="form-group"><label>备注名称</label><input id="acc-name-qr" class="form-control" type="text" placeholder="不填则默认使用QQ号"></div>
+          <div id="qr-container" class="qr-wrap">
+            <button id="btn-qr-generate" class="btn btn-primary" type="button">生成二维码</button>
+            <button id="btn-qr-open-url" class="btn" type="button">跳转QQ登录</button>
+            <div id="qr-code-display" class="qr-display" style="display:none">
+              <img id="qr-code-img" alt="二维码"><div id="qr-status">等待扫码中...</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer" id="modal-footer-manual" style="display:flex"><button class="btn" id="btn-cancel-acc" type="button">取消</button><button class="btn btn-primary" id="btn-save-acc" type="button">保存</button></div>
+      <div class="modal-footer" id="modal-footer-qr" style="display:none"><button class="btn" id="btn-cancel-acc-qr" type="button">取消</button></div>
+    </div>
+  </div>
+
+  <script src="js/core.js?v=2026021808"></script>
+  <script src="js/polling-accounts.js?v=2026021808"></script>
+  <script src="js/pages.js?v=2026021808"></script>
+  <script src="js/modal-accounts.js?v=2026021808"></script>
+  <script src="js/init.js?v=2026021808"></script>
+</body>
+</html>
