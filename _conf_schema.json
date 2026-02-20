@@ -1,4 +1,4 @@
-{
+﻿{
   "gateway_ws_url": {
     "description": "QQ 农场网关 WebSocket 地址",
     "type": "string",
@@ -14,6 +14,11 @@
     "type": "string",
     "default": "qq"
   },
+  "managed_mode": {
+    "description": "是否由插件托管运行时生命周期",
+    "type": "bool",
+    "default": true
+  },
   "heartbeat_interval_sec": {
     "description": "心跳间隔（秒）",
     "type": "int",
@@ -23,6 +28,26 @@
     "description": "单次 RPC 超时（秒）",
     "type": "int",
     "default": 10
+  },
+  "start_retry_max_attempts": {
+    "description": "账号启动最大重试次数",
+    "type": "int",
+    "default": 3
+  },
+  "start_retry_base_delay_sec": {
+    "description": "账号启动重试基础退避秒数",
+    "type": "float",
+    "default": 1.0
+  },
+  "start_retry_max_delay_sec": {
+    "description": "账号启动重试最大退避秒数",
+    "type": "float",
+    "default": 8.0
+  },
+  "auto_start_concurrency": {
+    "description": "插件启动时账号自动拉起并发数",
+    "type": "int",
+    "default": 5
   },
   "request_timeout_sec": {
     "description": "命令请求超时（秒）",
@@ -55,7 +80,7 @@
     "default": 20
   },
   "account_write_serialized": {
-    "description": "同账号写操作是否串行化",
+    "description": "同账号写操作是否串行",
     "type": "bool",
     "default": true
   },

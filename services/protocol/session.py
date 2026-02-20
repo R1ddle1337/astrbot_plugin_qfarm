@@ -73,10 +73,10 @@ class GatewaySession:
         try:
             self._ws = await self._http.ws_connect(
                 url,
-                heartbeat=0,
+                heartbeat=30,
                 origin=self.config.origin,
-                autoclose=False,
-                autoping=False,
+                autoclose=True,
+                autoping=True,
             )
         except Exception as e:
             await self._hard_close()
@@ -125,16 +125,20 @@ class GatewaySession:
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.BINARY:
-                    await self._handle_binary(bytes(msg.data))
+                    try:
+                        await self._handle_binary(bytes(msg.data))
+                    except Exception as e:
+                        self._log_warning(f"decode binary message failed: {e}")
+                        continue
                 elif msg.type in {aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED}:
                     break
                 elif msg.type == aiohttp.WSMsgType.ERROR:
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            self._log_warning(f"websocket recv loop error: {e}")
         finally:
             await self._fail_all_pending("websocket disconnected")
-            await self._hard_close()
+            await self._close_from_recv_loop()
 
     async def _handle_binary(self, data: bytes) -> None:
         parsed = decode_gate_message(data)
@@ -171,11 +175,20 @@ class GatewaySession:
             if not fut.done():
                 fut.set_exception(GatewaySessionError(reason))
 
-    async def _hard_close(self) -> None:
+    async def _close_from_recv_loop(self) -> None:
+        async with self._close_lock:
+            await self._hard_close(called_from_recv=True)
+
+    async def _hard_close(self, *, called_from_recv: bool = False) -> None:
         self._closed = True
         recv_task = self._recv_task
         self._recv_task = None
-        if recv_task is not None and not recv_task.done():
+        current = asyncio.current_task()
+        if (
+            recv_task is not None
+            and not recv_task.done()
+            and (not called_from_recv or recv_task is not current)
+        ):
             recv_task.cancel()
             try:
                 await recv_task
@@ -193,6 +206,10 @@ class GatewaySession:
         if http is not None and not http.closed:
             await http.close()
         await self.notify_dispatcher.clear()
+
+    def _log_warning(self, message: str) -> None:
+        if self.logger and hasattr(self.logger, "warning"):
+            self.logger.warning(f"[qfarm-session] {message}")
 
     def _build_ws_url(self, *, code: str) -> str:
         query = urlencode(

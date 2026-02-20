@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import asyncio
 import re
@@ -13,6 +13,36 @@ from .state_store import QFarmStateStore
 
 def tokenize_command(message: str) -> list[str]:
     return [seg for seg in re.split(r"\s+", str(message or "").strip()) if seg]
+
+
+COMPOUND_COMMAND_MAP: dict[str, list[str]] = {
+    "\u519c\u7530\u67e5\u770b": ["\u519c\u7530", "\u67e5\u770b"],
+    "\u519c\u7530\u64cd\u4f5c": ["\u519c\u7530", "\u64cd\u4f5c"],
+    "\u597d\u53cb\u5217\u8868": ["\u597d\u53cb", "\u5217\u8868"],
+    "\u8d26\u53f7\u67e5\u770b": ["\u8d26\u53f7", "\u67e5\u770b"],
+    "\u8d26\u53f7\u542f\u52a8": ["\u8d26\u53f7", "\u542f\u52a8"],
+    "\u8d26\u53f7\u505c\u6b62": ["\u8d26\u53f7", "\u505c\u6b62"],
+    "\u8d26\u53f7\u89e3\u7ed1": ["\u8d26\u53f7", "\u89e3\u7ed1"],
+    "\u8d26\u53f7\u7ed1\u5b9a\u626b\u7801": ["\u8d26\u53f7", "\u7ed1\u5b9a\u626b\u7801"],
+    "\u8d26\u53f7\u53d6\u6d88\u626b\u7801": ["\u8d26\u53f7", "\u53d6\u6d88\u626b\u7801"],
+    "\u81ea\u52a8\u5316\u67e5\u770b": ["\u81ea\u52a8\u5316", "\u67e5\u770b"],
+    "\u80cc\u5305\u67e5\u770b": ["\u80cc\u5305", "\u67e5\u770b"],
+    "\u79cd\u5b50\u5217\u8868": ["\u79cd\u5b50", "\u5217\u8868"],
+    "\u670d\u52a1\u72b6\u6001": ["\u670d\u52a1", "\u72b6\u6001"],
+    "\u670d\u52a1\u542f\u52a8": ["\u670d\u52a1", "\u542f\u52a8"],
+    "\u670d\u52a1\u505c\u6b62": ["\u670d\u52a1", "\u505c\u6b62"],
+    "\u670d\u52a1\u91cd\u542f": ["\u670d\u52a1", "\u91cd\u542f"],
+}
+
+
+def normalize_compound_tokens(tokens: list[str]) -> list[str]:
+    if not tokens:
+        return []
+    first = str(tokens[0]).strip()
+    mapped = COMPOUND_COMMAND_MAP.get(first)
+    if not mapped:
+        return tokens
+    return mapped + tokens[1:]
 
 
 def parse_key_value_args(tokens: list[str]) -> tuple[int | None, dict[str, str]]:
@@ -93,6 +123,13 @@ class QFarmCommandRouter:
         tokens = tokenize_command(getattr(event, "message_str", ""))
         if tokens and self._token(tokens[0]) in {"qfarm", "农场"}:
             tokens = tokens[1:]
+        elif tokens and str(tokens[0]).strip().lower().startswith("qfarm"):
+            merged = str(tokens[0]).strip()
+            suffix = merged[5:].strip()
+            if suffix:
+                tokens = [suffix, *tokens[1:]]
+
+        tokens = normalize_compound_tokens(tokens)
         if not tokens:
             return [RouterReply(text=self._help_text())]
 
@@ -185,10 +222,24 @@ class QFarmCommandRouter:
                 f"进程运行: {'是' if p.get('running') else '否'}",
                 f"PID: {p.get('pid') or '-'}",
                 f"运行账号数: {p.get('runtimeCount', '-')}",
+                f"启动重试中: {p.get('retryingCount', 0)}",
+                f"启动失败账号: {p.get('failedCount', 0)}",
                 f"API可达: {'是' if ping_ok else '否'}",
             ]
             if ping_error:
                 lines.append(f"API错误: {ping_error}")
+            failed_accounts = p.get("failedAccounts") if isinstance(p, dict) else []
+            if isinstance(failed_accounts, list) and failed_accounts:
+                lines.append("失败摘要:")
+                for row in failed_accounts[:5]:
+                    if not isinstance(row, dict):
+                        continue
+                    aid = row.get("accountId") or "-"
+                    retry = row.get("retryCount")
+                    err = row.get("error") or "-"
+                    lines.append(f"- 账号{aid} (重试{retry}): {err}")
+                if len(failed_accounts) > 5:
+                    lines.append(f"... 共 {len(failed_accounts)} 个失败账号")
             return [RouterReply(text="\n".join(lines))]
         if action in {"启动", "start"}:
             await self.process_manager.start()
@@ -206,6 +257,7 @@ class QFarmCommandRouter:
     async def _cmd_account(self, event: Any, user_id: str, args: list[str]) -> list[RouterReply]:
         if not args:
             return [RouterReply(text="用法: qfarm 账号 查看|绑定|解绑|启动|停止|重连|取消扫码")]
+
         sub = self._token(args[0])
         if sub in {"查看", "view"}:
             info = self.state_store.get_bound_account_info(user_id)
@@ -215,6 +267,11 @@ class QFarmCommandRouter:
             if not account:
                 self.state_store.unbind_account(user_id)
                 return [RouterReply(text="检测到绑定账号已不存在，已自动解绑，请重新绑定。")]
+
+            status_data = await self.api.get_status(info["account_id"])
+            runtime_state = status_data.get("runtimeState", "stopped")
+            retry_count = status_data.get("startRetryCount", 0)
+            last_error = status_data.get("lastStartError", "")
             lines = [
                 "【账号绑定】",
                 f"用户ID: {user_id}",
@@ -223,18 +280,25 @@ class QFarmCommandRouter:
                 f"平台: {account.get('platform') or '-'}",
                 f"QQ/UIN: {account.get('qq') or account.get('uin') or '-'}",
                 f"运行中: {'是' if account.get('running') else '否'}",
+                f"运行态: {runtime_state}",
+                f"启动重试次数: {retry_count}",
             ]
+            if last_error:
+                lines.append(f"最近启动错误: {last_error}")
             return [RouterReply(text="\n".join(lines))]
+
         if sub in {"绑定扫码", "bindscan", "扫码绑定"} or (
             sub in {"绑定", "bind"} and len(args) >= 2 and self._token(args[1]) in {"扫码", "scan"}
         ):
             return await self._start_qr_bind(event, user_id)
+
         if sub in {"取消扫码", "cancelscan"}:
             task = self._qr_tasks.pop(user_id, None)
             if not task:
                 return [RouterReply(text="当前没有进行中的扫码绑定任务。")]
             task.cancel()
             return [RouterReply(text="已取消扫码绑定。")]
+
         if sub in {"绑定", "bind"}:
             if len(args) < 3 or self._token(args[1]) != "code":
                 return [RouterReply(text="用法: qfarm 账号 绑定 code <code> [备注名]")]
@@ -244,6 +308,7 @@ class QFarmCommandRouter:
             name = " ".join(args[3:]).strip()
             account = await self._bind_account_with_code(user_id, code=code, account_name=name)
             return [RouterReply(text=f"绑定成功: 账号ID={account.get('id')} 名称={account.get('name') or '-'}")]
+
         if sub in {"解绑", "unbind"}:
             account_id = self.state_store.get_bound_account(user_id)
             if not account_id:
@@ -254,14 +319,20 @@ class QFarmCommandRouter:
                 self._log_warning(f"删除账号失败(忽略): {e}")
             self.state_store.unbind_account(user_id)
             return [RouterReply(text=f"解绑成功，账号 {account_id} 已删除并解除绑定。")]
+
         if sub in {"启动", "start"}:
             account_id, _ = await self._require_bound_account(user_id)
             await self.api.start_account(account_id)
-            return [RouterReply(text="账号启动指令已发送。")]
+            status_data = await self.api.get_status(account_id)
+            runtime_state = status_data.get("runtimeState", "running")
+            retry_count = status_data.get("startRetryCount", 0)
+            return [RouterReply(text=f"账号启动完成: state={runtime_state}, retries={retry_count}")]
+
         if sub in {"停止", "stop"}:
             account_id, _ = await self._require_bound_account(user_id)
             await self.api.stop_account(account_id)
             return [RouterReply(text="账号停止指令已发送。")]
+
         if sub in {"重连", "reconnect"}:
             account_id, account = await self._require_bound_account(user_id)
             if len(args) >= 2:
@@ -282,6 +353,7 @@ class QFarmCommandRouter:
             await self.api.stop_account(account_id)
             await self.api.start_account(account_id)
             return [RouterReply(text="账号已执行停止+启动重连。")]
+
         return [RouterReply(text="未知账号子命令。")]
 
     async def _cmd_status(self, user_id: str) -> list[RouterReply]:
@@ -369,7 +441,8 @@ class QFarmCommandRouter:
         account_id, _ = await self._require_bound_account(user_id)
         bag = await self.api.get_bag(account_id)
         items = bag.get("items", []) if isinstance(bag, dict) else []
-        lines = [f"【背包】种类数: {bag.get('totalKinds', len(items)) if isinstance(bag, dict) else len(items)}"]
+        total = bag.get("totalKinds", len(items)) if isinstance(bag, dict) else len(items)
+        lines = [f"【背包】种类数: {total}"]
         if not items:
             lines.append("暂无物品。")
             return [RouterReply(text="\n".join(lines))]
@@ -399,18 +472,16 @@ class QFarmCommandRouter:
             "exp": "expPerHour",
             "fert": "normalFertilizerExpPerHour",
             "profit": "profitPerHour",
-            "fert_profit": "normalFertilizerProfitPerHour",
-            "level": "level",
+            "fert_profit": "fertProfitPerHour",
+            "level": "requiredLevel",
         }[sort_by]
-        for idx, row in enumerate(rows[:30], start=1):
-            name = row.get("name") or f"作物{row.get('seedId')}"
+        for row in rows[:60]:
             seed_id = row.get("seedId")
-            level = row.get("level")
-            grow_time = row.get("growTimeStr") or "-"
-            metric_val = row.get(metric_key, "-")
-            lines.append(f"{idx}. {name} seed={seed_id} Lv{level} 周期{grow_time} 指标={metric_val}")
-        if len(rows) > 30:
-            lines.append(f"... 共 {len(rows)} 条，仅展示前 30 条。")
+            name = row.get("name") or f"seed-{seed_id}"
+            metric = row.get(metric_key)
+            lines.append(f"- {name}({seed_id}) => {metric_key}={metric}")
+        if len(rows) > 60:
+            lines.append(f"... 共 {len(rows)} 条，仅展示前 60 条。")
         return [RouterReply(text="\n".join(lines))]
 
     async def _cmd_automation(self, user_id: str, args: list[str]) -> list[RouterReply]:
@@ -418,6 +489,7 @@ class QFarmCommandRouter:
             return [RouterReply(text="用法: qfarm 自动化 查看 | 设置 <key> <on|off> | 施肥 <both|normal|organic|none>")]
         sub = self._token(args[0])
         account_id, _ = await self._require_bound_account(user_id)
+
         if sub in {"查看", "view"}:
             settings = await self.api.get_settings(account_id)
             auto = settings.get("automation", {}) if isinstance(settings, dict) else {}
@@ -428,6 +500,7 @@ class QFarmCommandRouter:
                 for key in sorted(auto.keys()):
                     lines.append(f"- {key}: {auto.get(key)}")
             return [RouterReply(text="\n".join(lines))]
+
         if sub in {"设置", "set"}:
             if len(args) < 3:
                 return [RouterReply(text="用法: qfarm 自动化 设置 <key> <on|off>")]
@@ -437,12 +510,14 @@ class QFarmCommandRouter:
                 return [RouterReply(text="自动化设置参数非法。")]
             await self.api.set_automation(account_id, key, value)
             return [RouterReply(text=f"自动化已更新: {key}={value}")]
+
         if sub in {"施肥", "fertilizer"}:
             if len(args) < 2:
                 return [RouterReply(text="用法: qfarm 自动化 施肥 <both|normal|organic|none>")]
             mode = self._token(args[1])
             if mode not in self.FERTILIZER_MODES:
                 return [RouterReply(text="施肥模式非法，仅支持 both|normal|organic|none")]
+
             used_fallback = False
             try:
                 await self.api.save_settings(account_id, {"automation": {"fertilizer": mode}})
@@ -456,9 +531,11 @@ class QFarmCommandRouter:
                 self._log_warning(f"施肥模式写入 settings/save 失败，回退 automation: {e}")
                 await self.api.set_automation(account_id, "fertilizer", mode)
                 used_fallback = True
+
             if used_fallback:
                 return [RouterReply(text=f"施肥模式已更新: {mode}（兼容回退已启用）")]
             return [RouterReply(text=f"施肥模式已更新: {mode}")]
+
         return [RouterReply(text="未知自动化子命令。")]
 
     async def _cmd_settings(self, user_id: str, args: list[str]) -> list[RouterReply]:
@@ -466,6 +543,7 @@ class QFarmCommandRouter:
             return [RouterReply(text="用法: qfarm 设置 策略|种子|间隔|静默 ...")]
         sub = self._token(args[0])
         account_id, _ = await self._require_bound_account(user_id)
+
         if sub in {"策略", "strategy"}:
             if len(args) < 2:
                 return [RouterReply(text="用法: qfarm 设置 策略 <preferred|level|max_exp|max_fert_exp|max_profit|max_fert_profit>")]
@@ -474,6 +552,7 @@ class QFarmCommandRouter:
                 return [RouterReply(text="策略非法。")]
             await self.api.save_settings(account_id, {"strategy": strategy})
             return [RouterReply(text=f"策略已更新: {strategy}")]
+
         if sub in {"种子", "seed"}:
             if len(args) < 2 or not str(args[1]).isdigit():
                 return [RouterReply(text="用法: qfarm 设置 种子 <seedId>")]
@@ -482,6 +561,7 @@ class QFarmCommandRouter:
                 return [RouterReply(text="seedId 必须 >= 0。")]
             await self.api.save_settings(account_id, {"seedId": seed_id})
             return [RouterReply(text=f"偏好种子已更新: {seed_id}")]
+
         if sub in {"间隔", "interval"}:
             if len(args) < 4:
                 return [RouterReply(text="用法: qfarm 设置 间隔 农场 <minSec> <maxSec> | 间隔 好友 <minSec> <maxSec>")]
@@ -492,10 +572,12 @@ class QFarmCommandRouter:
             max_sec = max(1, int(args[3]))
             if min_sec > max_sec:
                 return [RouterReply(text="间隔参数非法：minSec 不能大于 maxSec。")]
+
             settings = await self.api.get_settings(account_id)
             intervals = settings.get("intervals", {}) if isinstance(settings, dict) else {}
             if not isinstance(intervals, dict):
                 intervals = {}
+
             if target in {"农场", "farm"}:
                 intervals["farmMin"] = min_sec
                 intervals["farmMax"] = max_sec
@@ -506,8 +588,10 @@ class QFarmCommandRouter:
                 intervals["friend"] = min_sec
             else:
                 return [RouterReply(text="用法: qfarm 设置 间隔 农场 <minSec> <maxSec> | 间隔 好友 <minSec> <maxSec>")]
+
             await self.api.save_settings(account_id, {"intervals": intervals})
             return [RouterReply(text=f"间隔已更新: {target} {min_sec}-{max_sec}s")]
+
         if sub in {"静默", "quiet"}:
             if len(args) < 4:
                 return [RouterReply(text="用法: qfarm 设置 静默 <on|off> <HH:MM> <HH:MM>")]
@@ -518,8 +602,12 @@ class QFarmCommandRouter:
                 return [RouterReply(text="静默开关非法，请使用 on/off。")]
             if not self._is_valid_time(start) or not self._is_valid_time(end):
                 return [RouterReply(text="时间格式非法，请使用 HH:MM（24小时制）。")]
-            await self.api.save_settings(account_id, {"friendQuietHours": {"enabled": enabled, "start": start, "end": end}})
+            await self.api.save_settings(
+                account_id,
+                {"friendQuietHours": {"enabled": enabled, "start": start, "end": end}},
+            )
             return [RouterReply(text=f"好友静默已更新: enabled={enabled}, {start}-{end}")]
+
         return [RouterReply(text="未知设置子命令。")]
 
     async def _cmd_theme(self, args: list[str]) -> list[RouterReply]:
@@ -557,65 +645,60 @@ class QFarmCommandRouter:
             time_text = str(entry.get("time") or "")
             msg = str(entry.get("msg") or "")
             tag = str(entry.get("tag") or "")
-            meta = entry.get("meta", {}) if isinstance(entry, dict) else {}
-            module_name = str(meta.get("module") or "-")
-            event_name = str(meta.get("event") or "-")
-            lines.append(f"- [{time_text}] [{tag}] [{module_name}/{event_name}] {msg}")
+            warn = bool(entry.get("isWarn"))
+            level = "WARN" if warn else "INFO"
+            lines.append(f"- [{level}] {time_text} [{tag}] {msg}")
         return [RouterReply(text="\n".join(lines))]
 
     async def _cmd_account_logs(self, args: list[str]) -> list[RouterReply]:
-        limit = 100
-        if args and args[0].isdigit():
+        limit = 50
+        if args and str(args[0]).isdigit():
             limit = min(300, max(1, int(args[0])))
         logs = await self.api.get_account_logs(limit=limit)
         lines = [f"【账号日志】数量: {len(logs)} (limit={limit})"]
         if not logs:
             lines.append("暂无账号日志。")
             return [RouterReply(text="\n".join(lines))]
-        for entry in logs:
-            time_text = str(entry.get("time") or "")
-            action = str(entry.get("action") or "-")
-            msg = str(entry.get("msg") or "")
-            account_name = str(entry.get("accountName") or "")
-            account_id = str(entry.get("accountId") or "")
-            lines.append(f"- [{time_text}] [{action}] [{account_name or account_id}] {msg}")
+        for row in logs:
+            time_text = str(row.get("time") or "")
+            action = str(row.get("action") or "")
+            msg = str(row.get("msg") or "")
+            aid = str(row.get("accountId") or "")
+            name = str(row.get("accountName") or "")
+            lines.append(f"- {time_text} [{action}] account={aid}/{name} {msg}")
         return [RouterReply(text="\n".join(lines))]
 
     async def _cmd_debug(self, user_id: str, args: list[str]) -> list[RouterReply]:
-        if not self.is_super_admin(user_id):
-            return [RouterReply(text="权限不足：调试命令仅超级管理员可用。")]
         if not args:
             return [RouterReply(text="用法: qfarm 调试 出售")]
         sub = self._token(args[0])
         if sub not in {"出售", "sell"}:
-            return [RouterReply(text="仅支持: qfarm 调试 出售")]
+            return [RouterReply(text="调试子命令仅支持: 出售")]
         account_id, _ = await self._require_bound_account(user_id)
         await self.api.debug_sell(account_id)
-        return [RouterReply(text="已触发调试出售，请查看日志。")]
+        return [RouterReply(text="调试出售已触发。")]
 
     async def _cmd_whitelist(self, args: list[str]) -> list[RouterReply]:
-        if not args:
-            return [RouterReply(text="用法: qfarm 白名单 用户|群 列表|添加|删除 <id>")]
-        target = self._token(args[0])
-        if target not in {"用户", "user", "群", "group"}:
-            return [RouterReply(text="白名单对象仅支持 用户|群")]
         if len(args) < 2:
             return [RouterReply(text="用法: qfarm 白名单 用户|群 列表|添加|删除 <id>")]
+
+        target = self._token(args[0])
         action = self._token(args[1])
         is_user = target in {"用户", "user"}
+        is_group = target in {"群", "group"}
+        if not is_user and not is_group:
+            return [RouterReply(text="白名单目标仅支持: 用户|群")]
 
         if action in {"列表", "list"}:
-            if is_user:
-                local_values = self.state_store.list_local_whitelist_users()
-                merged_values = self.state_store.list_whitelist_users()
-                text = "【白名单-用户】\n"
+            items = self.state_store.list_whitelist_users() if is_user else self.state_store.list_whitelist_groups()
+            title = "用户白名单" if is_user else "群白名单"
+            lines = [f"【{title}】数量: {len(items)}"]
+            if not items:
+                lines.append("空")
             else:
-                local_values = self.state_store.list_local_whitelist_groups()
-                merged_values = self.state_store.list_whitelist_groups()
-                text = "【白名单-群】\n"
-            text += f"本地维护: {', '.join(local_values) if local_values else '(空)'}\n"
-            text += f"生效集合(含配置): {', '.join(merged_values) if merged_values else '(空)'}"
-            return [RouterReply(text=text)]
+                for value in items:
+                    lines.append(f"- {value}")
+            return [RouterReply(text="\n".join(lines))]
 
         if len(args) < 3:
             return [RouterReply(text="请提供要操作的 ID。")]
@@ -629,6 +712,7 @@ class QFarmCommandRouter:
         if action in {"删除", "移除", "del", "remove"}:
             changed = self.state_store.remove_whitelist_user(target_id) if is_user else self.state_store.remove_whitelist_group(target_id)
             return [RouterReply(text=f"{'已删除' if changed else '不存在'}: {target_id}")]
+
         return [RouterReply(text="白名单动作仅支持 列表|添加|删除")]
 
     def _help_text(self) -> str:
@@ -716,7 +800,23 @@ class QFarmCommandRouter:
                             "avatar": str(data.get("avatar") or ""),
                         },
                     )
-                    await self._notify_active(umo, f"扫码绑定成功: 账号ID={account.get('id')} 名称={account.get('name') or '-'}")
+                    account_id = str(account.get("id") or "")
+                    status_data = await self.api.get_status(account_id)
+                    runtime_state = str(status_data.get("runtimeState") or "stopped")
+                    last_error = str(status_data.get("lastStartError") or "")
+                    if runtime_state == "running":
+                        await self._notify_active(
+                            umo,
+                            f"扫码绑定并启动成功: 账号ID={account_id} 名称={account.get('name') or '-'}",
+                        )
+                    else:
+                        await self._notify_active(
+                            umo,
+                            (
+                                f"扫码绑定成功，但自动启动失败: {last_error or runtime_state}\n"
+                                "可手动执行: qfarm 账号 启动"
+                            ),
+                        )
                     return
                 if status == "Used":
                     await self._notify_active(umo, "二维码已失效，请重新发起 `qfarm 账号 绑定扫码`。")
@@ -741,16 +841,19 @@ class QFarmCommandRouter:
         code = str(code or "").strip()
         if not code:
             raise QFarmApiError("code 不能为空。")
+
         existing_id = self.state_store.get_bound_account(user_id)
         before_accounts = await self.api.get_accounts()
         before_list = before_accounts.get("accounts", []) if isinstance(before_accounts, dict) else []
         before_map = {str(acc.get("id")): acc for acc in before_list if isinstance(acc, dict)}
+
         account: dict[str, Any] | None = None
         if existing_id:
             account = before_map.get(str(existing_id))
             if not account:
                 self.state_store.unbind_account(user_id)
                 existing_id = None
+
         if existing_id:
             payload = {
                 "id": existing_id,
@@ -774,6 +877,7 @@ class QFarmCommandRouter:
         if extra_fields:
             payload.update({k: v for k, v in extra_fields.items() if v is not None and v != ""})
         await self.api.upsert_account(payload)
+
         after_accounts = await self.api.get_accounts()
         after_list = after_accounts.get("accounts", []) if isinstance(after_accounts, dict) else []
         before_ids = set(before_map.keys())
@@ -782,11 +886,13 @@ class QFarmCommandRouter:
             candidates = [acc for acc in after_list if isinstance(acc, dict) and str(acc.get("code") or "") == code]
         if not candidates:
             raise QFarmApiError("创建账号后未能识别新账号ID。")
+
         candidates.sort(key=lambda x: int(x.get("updatedAt") or x.get("createdAt") or 0), reverse=True)
         created = candidates[0]
         account_id = str(created.get("id") or "").strip()
         if not account_id:
             raise QFarmApiError("创建账号后缺少账号ID。")
+
         self.state_store.bind_account(user_id, account_id, created.get("name") or "")
         return created
 
@@ -849,7 +955,24 @@ class QFarmCommandRouter:
             if not args:
                 return False
             return args[0] not in {"查看", "view"}
-        if cmd in {"状态", "status", "种子", "seed", "seeds", "背包", "bag", "分析", "analytics", "analysis", "日志", "log", "logs", "账号日志", "accountlogs", "account-logs"}:
+        if cmd in {
+            "状态",
+            "status",
+            "种子",
+            "seed",
+            "seeds",
+            "背包",
+            "bag",
+            "分析",
+            "analytics",
+            "analysis",
+            "日志",
+            "log",
+            "logs",
+            "账号日志",
+            "accountlogs",
+            "account-logs",
+        }:
             return False
         if cmd in {"农田", "farm"}:
             return len(args) >= 1 and args[0] in {"操作", "op", "operate"}
@@ -928,21 +1051,48 @@ class QFarmCommandRouter:
         ops = data.get("operations", {}) if isinstance(data, dict) else {}
         exp_progress = data.get("expProgress", {}) if isinstance(data, dict) else {}
         next_checks = data.get("nextChecks", {}) if isinstance(data, dict) else {}
+        runtime_state = data.get("runtimeState", "stopped") if isinstance(data, dict) else "stopped"
+        retry_count = data.get("startRetryCount", 0) if isinstance(data, dict) else 0
+        last_error = str(data.get("lastStartError") or "") if isinstance(data, dict) else ""
+
         lines = [
             "【农场状态】",
             f"连接: {'在线' if conn.get('connected') else '离线'}",
+            f"运行态: {runtime_state}",
+            f"启动重试次数: {retry_count}",
             f"昵称: {status.get('name') or '-'}",
             f"等级: Lv{status.get('level', 0)}",
             f"金币: {status.get('gold', 0)}",
             f"经验: {status.get('exp', 0)}",
             f"点券: {status.get('coupon', 0)}",
-            f"会话收益: 经验 {data.get('sessionExpGained', 0)} / 金币 {data.get('sessionGoldGained', 0)} / 点券 {data.get('sessionCouponGained', 0)}",
-            f"下次巡田: {next_checks.get('farmRemainSec', '--')}s",
+            (
+                "会话收益: "
+                f"经验 {data.get('sessionExpGained', 0)} / "
+                f"金币 {data.get('sessionGoldGained', 0)} / "
+                f"点券 {data.get('sessionCouponGained', 0)}"
+            ),
+            f"下次农田: {next_checks.get('farmRemainSec', '--')}s",
             f"下次好友巡查: {next_checks.get('friendRemainSec', '--')}s",
             f"经验进度: {exp_progress.get('current', 0)}/{exp_progress.get('needed', 0)}",
         ]
+        if last_error:
+            lines.append(f"最近启动错误: {last_error}")
+
         op_parts = []
-        for key in ("harvest", "water", "weed", "bug", "plant", "steal", "helpWater", "helpWeed", "helpBug", "taskClaim", "sell", "upgrade"):
+        for key in (
+            "harvest",
+            "water",
+            "weed",
+            "bug",
+            "plant",
+            "steal",
+            "helpWater",
+            "helpWeed",
+            "helpBug",
+            "taskClaim",
+            "sell",
+            "upgrade",
+        ):
             if key in ops:
                 op_parts.append(f"{key}:{ops.get(key)}")
         if op_parts:
@@ -954,11 +1104,20 @@ class QFarmCommandRouter:
         summary = data.get("summary", {}) if isinstance(data, dict) else {}
         lines = [
             "【农田详情】",
-            f"收获:{summary.get('harvestable', 0)} 长成:{summary.get('growing', 0)} 空地:{summary.get('empty', 0)} 枯死:{summary.get('dead', 0)} 水:{summary.get('needWater', 0)} 草:{summary.get('needWeed', 0)} 虫:{summary.get('needBug', 0)}",
+            (
+                f"收获:{summary.get('harvestable', 0)} "
+                f"长成:{summary.get('growing', 0)} "
+                f"空地:{summary.get('empty', 0)} "
+                f"枯萎:{summary.get('dead', 0)} "
+                f"水:{summary.get('needWater', 0)} "
+                f"草:{summary.get('needWeed', 0)} "
+                f"虫:{summary.get('needBug', 0)}"
+            ),
         ]
         if not lands:
             lines.append("暂无土地数据。")
             return lines
+
         for land in lands[:80]:
             land_id = land.get("id")
             status = land.get("status") or "-"
@@ -976,6 +1135,7 @@ class QFarmCommandRouter:
             mature = land.get("matureInSec")
             mature_text = f" 成熟剩余:{mature}s" if isinstance(mature, int) and mature > 0 else ""
             lines.append(f"- #{land_id} [{status}] Lv{level} {plant} / {phase}{needs_text}{mature_text}")
+
         if len(lands) > 80:
             lines.append(f"... 共 {len(lands)} 块，仅展示前 80 块。")
         return lines
@@ -985,12 +1145,19 @@ class QFarmCommandRouter:
         if not friends:
             lines.append("暂无好友或接口无数据。")
             return lines
+
         for friend in friends[:80]:
             gid = friend.get("gid")
             name = friend.get("name") or f"GID:{gid}"
             plant = friend.get("plant") or {}
-            preview = f"偷{plant.get('stealNum', 0)} 水{plant.get('dryNum', 0)} 草{plant.get('weedNum', 0)} 虫{plant.get('insectNum', 0)}"
+            preview = (
+                f"偷{plant.get('stealNum', 0)} "
+                f"水{plant.get('dryNum', 0)} "
+                f"草{plant.get('weedNum', 0)} "
+                f"虫{plant.get('insectNum', 0)}"
+            )
             lines.append(f"- {name} ({gid}) => {preview}")
+
         if len(friends) > 80:
             lines.append(f"... 共 {len(friends)} 人，仅展示前 80 人。")
         return lines
@@ -998,13 +1165,27 @@ class QFarmCommandRouter:
     def _format_friend_lands(self, gid: str, data: dict[str, Any]) -> list[str]:
         lands = data.get("lands", []) if isinstance(data, dict) else []
         summary = data.get("summary", {}) if isinstance(data, dict) else {}
+        stealable = summary.get("stealable", 0)
+        need_water = summary.get("needWater", 0)
+        need_weed = summary.get("needWeed", 0)
+        need_bug = summary.get("needBug", 0)
+        if isinstance(stealable, list):
+            stealable = len(stealable)
+        if isinstance(need_water, list):
+            need_water = len(need_water)
+        if isinstance(need_weed, list):
+            need_weed = len(need_weed)
+        if isinstance(need_bug, list):
+            need_bug = len(need_bug)
+
         lines = [
             f"【好友农田】gid={gid}",
-            f"可偷:{len(summary.get('stealable', [])) if isinstance(summary.get('stealable'), list) else summary.get('stealable', 0)} 可浇水:{len(summary.get('needWater', [])) if isinstance(summary.get('needWater'), list) else summary.get('needWater', 0)} 可除草:{len(summary.get('needWeed', [])) if isinstance(summary.get('needWeed'), list) else summary.get('needWeed', 0)} 可除虫:{len(summary.get('needBug', [])) if isinstance(summary.get('needBug'), list) else summary.get('needBug', 0)}",
+            f"可偷:{stealable} 可浇水:{need_water} 可除草:{need_weed} 可除虫:{need_bug}",
         ]
         if not lands:
             lines.append("无土地明细。")
             return lines
+
         for land in lands[:80]:
             land_id = land.get("id")
             status = land.get("status") or "-"
@@ -1019,6 +1200,7 @@ class QFarmCommandRouter:
                 needs.append("虫")
             needs_text = f" 需:{'/'.join(needs)}" if needs else ""
             lines.append(f"- #{land_id} [{status}] {plant} / {phase}{needs_text}")
+
         if len(lands) > 80:
             lines.append(f"... 共 {len(lands)} 块，仅展示前 80 块。")
         return lines
@@ -1054,3 +1236,13 @@ class QFarmCommandRouter:
             self.logger.warn(message)
         else:
             print(message)
+
+
+
+
+
+
+
+
+
+

@@ -50,6 +50,10 @@ class QFarmPlugin(Star):
         render_timeout_sec = self._cfg_int("render_timeout_sec", 30)
         render_healthcheck_sec = self._cfg_int("render_healthcheck_sec", 3)
         managed_mode = self._cfg_bool("managed_mode", True)
+        start_retry_max_attempts = self._cfg_int("start_retry_max_attempts", 3)
+        start_retry_base_delay_sec = self._cfg_float("start_retry_base_delay_sec", 1.0)
+        start_retry_max_delay_sec = self._cfg_float("start_retry_max_delay_sec", 8.0)
+        auto_start_concurrency = self._cfg_int("auto_start_concurrency", 5)
 
         self.state_store = QFarmStateStore(
             data_dir=self.plugin_data_dir,
@@ -65,6 +69,10 @@ class QFarmPlugin(Star):
             platform=platform,
             heartbeat_interval_sec=heartbeat_interval_sec,
             rpc_timeout_sec=rpc_timeout_sec,
+            start_retry_max_attempts=start_retry_max_attempts,
+            start_retry_base_delay_sec=start_retry_base_delay_sec,
+            start_retry_max_delay_sec=start_retry_max_delay_sec,
+            auto_start_concurrency=auto_start_concurrency,
             managed_mode=managed_mode,
             logger=logger,
         )

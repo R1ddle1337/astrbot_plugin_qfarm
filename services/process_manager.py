@@ -19,6 +19,10 @@ class NodeProcessManager:
         platform: str = "qq",
         heartbeat_interval_sec: int = 25,
         rpc_timeout_sec: int = 10,
+        start_retry_max_attempts: int = 3,
+        start_retry_base_delay_sec: float = 1.0,
+        start_retry_max_delay_sec: float = 8.0,
+        auto_start_concurrency: int = 5,
         managed_mode: bool = True,
         logger: Any | None = None,
     ) -> None:
@@ -31,6 +35,10 @@ class NodeProcessManager:
             platform=platform,
             heartbeat_interval_sec=heartbeat_interval_sec,
             rpc_timeout_sec=rpc_timeout_sec,
+            start_retry_max_attempts=start_retry_max_attempts,
+            start_retry_base_delay_sec=start_retry_base_delay_sec,
+            start_retry_max_delay_sec=start_retry_max_delay_sec,
+            auto_start_concurrency=auto_start_concurrency,
             logger=logger,
         )
 
