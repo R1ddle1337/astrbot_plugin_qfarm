@@ -1,4 +1,4 @@
-﻿{
+{
   "gateway_ws_url": {
     "description": "QQ 农场网关 WebSocket 地址",
     "type": "string",

@@ -1,4 +1,4 @@
-﻿# astrbot_plugin_qfarm
+# astrbot_plugin_qfarm
 
 AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 协议实现）。
 

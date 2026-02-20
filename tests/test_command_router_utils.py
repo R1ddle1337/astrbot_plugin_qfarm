@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from astrbot_plugin_qfarm.services.command_router import (
     normalize_compound_tokens,
