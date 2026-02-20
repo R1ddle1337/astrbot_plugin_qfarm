@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import secrets
 import time
 from pathlib import Path
 from typing import Any
@@ -25,7 +24,7 @@ def _normalize_id_list(values: Any) -> list[str]:
 
 
 class QFarmStateStore:
-    """插件本地状态持久化：绑定关系、白名单、运行时密钥。"""
+    """插件本地状态持久化：绑定关系、白名单、渲染主题。"""
 
     def __init__(
         self,
@@ -36,9 +35,9 @@ class QFarmStateStore:
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
-        self.owner_bindings_path = self.data_dir / "owner_bindings.json"
+        self.owner_bindings_path = self.data_dir / "bindings_v2.json"
         self.whitelist_path = self.data_dir / "whitelist.json"
-        self.runtime_secret_path = self.data_dir / "runtime_secret.json"
+        self.runtime_secret_path = self.data_dir / "state_v2.json"
 
         self._static_allowed_users = _normalize_id_list(static_allowed_users or [])
         self._static_allowed_groups = _normalize_id_list(static_allowed_groups or [])
@@ -59,28 +58,11 @@ class QFarmStateStore:
         self._whitelist["groups"] = _normalize_id_list(self._whitelist.get("groups", []))
         self._save_json(self.whitelist_path, self._whitelist)
 
-        self._runtime_secret = self._load_json(self.runtime_secret_path, {})
+        self._runtime_secret = self._load_json(self.runtime_secret_path, {"render_theme": "light"})
 
     def refresh_static_whitelist(self, users: list[str] | None, groups: list[str] | None) -> None:
         self._static_allowed_users = _normalize_id_list(users or [])
         self._static_allowed_groups = _normalize_id_list(groups or [])
-
-    def get_service_admin_password(self, configured_password: str | None) -> str:
-        configured = str(configured_password or "").strip()
-        if configured:
-            if self._runtime_secret.get("service_admin_password") != configured:
-                self._runtime_secret["service_admin_password"] = configured
-                self._save_json(self.runtime_secret_path, self._runtime_secret)
-            return configured
-
-        current = str(self._runtime_secret.get("service_admin_password") or "").strip()
-        if current:
-            return current
-
-        generated = secrets.token_urlsafe(24)
-        self._runtime_secret["service_admin_password"] = generated
-        self._save_json(self.runtime_secret_path, self._runtime_secret)
-        return generated
 
     def get_render_theme(self, default: str = "light") -> str:
         fallback = str(default or "light").strip().lower()

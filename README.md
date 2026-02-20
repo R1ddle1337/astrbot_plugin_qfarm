@@ -1,51 +1,39 @@
 # astrbot_plugin_qfarm
 
-AstrBot + NapCat 的 QQ 农场全量命令插件。  
-插件会复用 `qqfarm文档` 的 Node 服务能力，并提供 `qfarm/农场` 双入口命令。
+AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 协议实现）。  
+当前版本已彻底移除 Node/npm 运行依赖。
 
 - 作者：`riddle`
 - 仓库：`https://github.com/R1ddle1337/astrbot_plugin_qfarm`
 
-## 功能特性
+## 核心特性
 
-- 全量命令化（不依赖 Web 面板作为主入口）
-- 插件内托管 Node 服务（可开关）
-- 默认禁用 WebUI，仅保留本机 API（`127.0.0.1`）
-- 默认启用图片化输出（正常结果优先渲染图片）
+- 全量命令化入口：`/qfarm` 与 `/农场`
+- 33 条命令保持兼容
 - 每用户单账号绑定
-- 用户 + 群双白名单校验
-- 群聊 / 私聊都可绑定
-- 分级限流（用户冷却 + 全局并发 + 同账号写串行）
+- 用户 + 群双白名单
+- 读写分级限流 + 全局并发 + 同账号写串行
+- 纯 Python WS + protobuf 后端（无 WebUI）
+- 可选接入 `text2img-service` 的 `/api/qfarm` 图片渲染
 
-## 依赖
-
-1. Python 依赖
+## 依赖安装
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Node 依赖（必须在 `qqfarm文档` 目录执行）
-
-```bash
-cd qqfarm文档
-npm install
-```
-
-3. 运行环境
+## 运行环境
 
 - AstrBot
 - NapCat（AIOCQHTTP）
-- Node.js 18+
+- Python 3.10+
 
-## 命令总览
-
-统一入口：
+## 命令入口
 
 - `/qfarm ...`
 - `/农场 ...`
 
-命令清单（33项）：
+命令集合（33 条）保持与旧版一致：
 
 1. `帮助` `help`
 2. `服务 状态|启动|停止|重启`（超管）
@@ -81,65 +69,58 @@ npm install
 32. `白名单 用户 列表|添加|删除 <uid>`（超管）
 33. `白名单 群 列表|添加|删除 <gid>`（超管）
 
-## 权限模型
-
-- 私聊：用户必须在用户白名单中
-- 群聊：用户在用户白名单且群在群白名单中
-- 超级管理员命令：`服务`、`白名单`、`调试 出售`
-
-超级管理员来源：AstrBot 全局配置中的 `admins_id/admins/admin_ids/superusers`。
-
 ## 配置项（_conf_schema.json）
 
-- `managed_mode`: 是否由插件托管 Node 服务（默认 true）
-- `node_command`: Node 命令（默认 node）
-- `service_host`: API 地址（默认 127.0.0.1）
-- `service_port`: API 端口（默认 3000）
-- `service_bind_host`: 托管 Node 的监听地址（默认 127.0.0.1）
-- `disable_webui`: 是否禁用 Node WebUI（默认 true）
-- `service_admin_password`: API 管理密码（默认空，空时自动生成）
-- `request_timeout_sec`: 请求超时（默认 15）
-- `enable_image_render`: 是否启用图片渲染（默认 true）
-- `render_service_url`: 文转图服务地址（默认 `http://172.17.0.1:51234`）
-- `render_timeout_sec`: 图片渲染超时（默认 30）
-- `render_healthcheck_sec`: 图片服务健康检查超时（默认 3）
-- `allowed_user_ids`: 静态用户白名单
-- `allowed_group_ids`: 静态群白名单
-- `rate_limit_read_sec`: 读命令冷却（默认 1.0）
-- `rate_limit_write_sec`: 写命令冷却（默认 2.0）
-- `global_concurrency`: 全局并发（默认 20）
-- `account_write_serialized`: 同账号写串行（默认 true）
+- `gateway_ws_url`
+- `client_version`
+- `platform`
+- `heartbeat_interval_sec`
+- `rpc_timeout_sec`
+- `request_timeout_sec`
+- `allowed_user_ids`
+- `allowed_group_ids`
+- `rate_limit_read_sec`
+- `rate_limit_write_sec`
+- `global_concurrency`
+- `account_write_serialized`
+- `enable_image_render`
+- `render_service_url`
+- `render_timeout_sec`
+- `render_healthcheck_sec`
 
-## 持久化文件
+## 数据文件
 
-插件会在数据目录写入：
+插件数据目录会生成：
 
-- `owner_bindings.json`: 用户 -> 账号绑定
-- `whitelist.json`: 动态白名单
-- `runtime_secret.json`: 自动生成的服务密码
+- `bindings_v2.json`：用户绑定
+- `accounts_v2.json`：账号列表
+- `settings_v2.json`：自动化与策略配置
+- `runtime_v2.json`：运行态文件
+- `whitelist.json`：动态白名单
 
-## 常见问题
+## 图片渲染联动
 
-1. 命令报连接失败
-- 确认 `qqfarm文档` 已执行 `npm install`
-- 确认 `node` 命令可用
-- 查看 `qfarm 服务 状态`
+默认会尝试调用 `text2img-service`：
 
-2. 白名单用户无法在群里使用
-- 用户和群都必须在白名单
-- 用 `qfarm 白名单 用户 列表`、`qfarm 白名单 群 列表`检查
+- 地址：`http://172.17.0.1:51234`
+- 接口：`POST /api/qfarm`
 
-3. 扫码绑定超时
-- 二维码有效期 120 秒
-- 重新执行 `qfarm 账号 绑定扫码`
+渲染失败会自动回退纯文本，不影响命令执行。
 
-4. 图片化输出没有生效
-- 确认 `enable_image_render=true`
-- 确认 `render_service_url` 可访问（推荐先测试 `/health`）
-- 渲染失败会自动回退纯文本，不影响命令可用
+## 故障排查
 
-## 搭配 text2img-service
+1. 命令提示 `账号未运行`
+- 先执行：`qfarm 账号 启动`
+- 再执行：`qfarm 服务 状态`
 
-- 推荐渲染服务地址：`http://172.17.0.1:51234`
-- Docker 部署与说明见：`docs/文字转图片docker.md`
-- qfarm 会调用专用接口 `/api/qfarm` 进行结果渲染
+2. 绑定扫码失败
+- 检查容器网络是否可访问 `q.qq.com`
+- 重新执行：`qfarm 账号 绑定扫码`
+
+3. 白名单拒绝
+- 用户和群必须同时放行（群聊）
+- 使用白名单命令检查生效集合
+
+4. 图片不生效
+- 检查 `enable_image_render=true`
+- 检查 `render_service_url/health`

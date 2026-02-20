@@ -1,63 +1,33 @@
 {
-  "managed_mode": {
-    "description": "是否由插件托管 qfarm Node 服务",
-    "type": "bool",
-    "default": true
-  },
-  "node_command": {
-    "description": "Node 命令路径，例如 node 或 /usr/bin/node",
+  "gateway_ws_url": {
+    "description": "QQ 农场网关 WebSocket 地址",
     "type": "string",
-    "default": "node"
+    "default": "wss://gate-obt.nqf.qq.com/prod/ws"
   },
-  "service_host": {
-    "description": "qfarm HTTP 服务地址",
+  "client_version": {
+    "description": "客户端版本号（用于登录握手）",
     "type": "string",
-    "default": "127.0.0.1"
+    "default": "1.6.0.5_20251224"
   },
-  "service_port": {
-    "description": "qfarm HTTP 服务端口",
+  "platform": {
+    "description": "平台标识，当前仅支持 qq",
+    "type": "string",
+    "default": "qq"
+  },
+  "heartbeat_interval_sec": {
+    "description": "心跳间隔（秒）",
     "type": "int",
-    "default": 3000
+    "default": 25
   },
-  "service_bind_host": {
-    "description": "qfarm HTTP 服务监听地址（托管模式）",
-    "type": "string",
-    "default": "127.0.0.1"
-  },
-  "disable_webui": {
-    "description": "禁用 Node WebUI，仅保留 API 供插件调用",
-    "type": "bool",
-    "default": true
-  },
-  "service_admin_password": {
-    "description": "qfarm 管理密码，留空将自动生成并持久化",
-    "type": "string",
-    "default": ""
+  "rpc_timeout_sec": {
+    "description": "单次 RPC 超时（秒）",
+    "type": "int",
+    "default": 10
   },
   "request_timeout_sec": {
-    "description": "HTTP 请求超时（秒）",
+    "description": "命令请求超时（秒）",
     "type": "int",
     "default": 15
-  },
-  "enable_image_render": {
-    "description": "是否启用文本结果图片渲染",
-    "type": "bool",
-    "default": true
-  },
-  "render_service_url": {
-    "description": "文转图服务地址",
-    "type": "string",
-    "default": "http://172.17.0.1:51234"
-  },
-  "render_timeout_sec": {
-    "description": "图片渲染请求超时（秒）",
-    "type": "int",
-    "default": 30
-  },
-  "render_healthcheck_sec": {
-    "description": "图片渲染健康检查超时（秒）",
-    "type": "int",
-    "default": 3
   },
   "allowed_user_ids": {
     "description": "允许使用命令的用户白名单（静态）",
@@ -88,5 +58,25 @@
     "description": "同账号写操作是否串行化",
     "type": "bool",
     "default": true
+  },
+  "enable_image_render": {
+    "description": "是否启用文本结果图片渲染",
+    "type": "bool",
+    "default": true
+  },
+  "render_service_url": {
+    "description": "文转图服务地址",
+    "type": "string",
+    "default": "http://172.17.0.1:51234"
+  },
+  "render_timeout_sec": {
+    "description": "图片渲染请求超时（秒）",
+    "type": "int",
+    "default": 30
+  },
+  "render_healthcheck_sec": {
+    "description": "图片渲染健康检查超时（秒）",
+    "type": "int",
+    "default": 3
   }
 }

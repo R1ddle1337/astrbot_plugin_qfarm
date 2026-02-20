@@ -184,7 +184,7 @@ class QFarmCommandRouter:
                 f"托管模式: {'开' if p.get('managed_mode') else '关'}",
                 f"进程运行: {'是' if p.get('running') else '否'}",
                 f"PID: {p.get('pid') or '-'}",
-                f"端口: {p.get('port')}",
+                f"运行账号数: {p.get('runtimeCount', '-')}",
                 f"API可达: {'是' if ping_ok else '否'}",
             ]
             if ping_error:

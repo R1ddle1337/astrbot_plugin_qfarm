@@ -5,20 +5,9 @@ from pathlib import Path
 from astrbot_plugin_qfarm.services.state_store import QFarmStateStore
 
 
-def test_service_password_auto_generate_and_persist(tmp_path: Path):
-    store = QFarmStateStore(tmp_path)
-    pwd1 = store.get_service_admin_password("")
-    assert isinstance(pwd1, str)
-    assert pwd1
-
-    # 重新加载后应保持一致
-    store2 = QFarmStateStore(tmp_path)
-    pwd2 = store2.get_service_admin_password("")
-    assert pwd1 == pwd2
-
-
 def test_single_account_binding_policy(tmp_path: Path):
     store = QFarmStateStore(tmp_path)
+    assert (tmp_path / "bindings_v2.json").exists()
     store.bind_account("u1001", "acc-1", "A")
     assert store.get_bound_account("u1001") == "acc-1"
 
