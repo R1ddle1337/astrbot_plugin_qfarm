@@ -327,6 +327,20 @@ class AccountRuntime:
         analyzed = self.farm.analyze_lands(lands)
         actions: list[str] = []
         gid = _to_int(self.user_state["gid"])
+        self._debug_log(
+            "农场",
+            (
+                f"农场识别结果 mode={mode}: "
+                f"harvestable={len(analyzed.harvestable)} "
+                f"dead={len(analyzed.dead)} empty={len(analyzed.empty)}"
+            ),
+            module="farm",
+            event="analyze",
+            mode=mode,
+            harvestable=len(analyzed.harvestable),
+            dead=len(analyzed.dead),
+            empty=len(analyzed.empty),
+        )
 
         if mode in {"all", "clear"}:
             if analyzed.need_weed:
@@ -347,6 +361,14 @@ class AccountRuntime:
             await self.farm.harvest(harvest_ids, gid)
             self._record("harvest", len(harvest_ids))
             actions.append(f"收获{len(harvest_ids)}")
+            self._debug_log(
+                "农场",
+                f"收获执行完成: count={len(harvest_ids)}",
+                module="farm",
+                event="harvest",
+                count=len(harvest_ids),
+                landIds=list(harvest_ids),
+            )
 
         if mode in {"all", "plant"}:
             planted = await self._auto_plant(list(analyzed.dead) + harvest_ids, list(analyzed.empty))
@@ -519,3 +541,21 @@ class AccountRuntime:
 
     def _record(self, key: str, value: int) -> None:
         self.operations[key] = _to_int(self.operations.get(key), 0) + max(0, _to_int(value))
+
+    def _debug_log(self, tag: str, message: str, **meta: Any) -> None:
+        if self.logger and hasattr(self.logger, "debug"):
+            try:
+                self.logger.debug(f"[qfarm-runtime] [{tag}] {message}")
+            except Exception:
+                pass
+        if self.log_callback:
+            try:
+                self.log_callback(
+                    str((self.account or {}).get("id") or ""),
+                    str(tag or ""),
+                    str(message or ""),
+                    False,
+                    meta,
+                )
+            except Exception:
+                pass

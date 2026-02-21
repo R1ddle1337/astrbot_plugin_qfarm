@@ -299,7 +299,8 @@ class FarmService:
             if need_b:
                 need_bug.append(land_id)
 
-            if phase_val == plantpb_pb2.MATURE and bool(plant.stealable):
+            # 自有农场成熟判定只看阶段，不能依赖 stealable（该字段用于好友偷菜语义）
+            if phase_val == plantpb_pb2.MATURE:
                 status = "harvestable"
                 harvestable.append(land_id)
             elif phase_val == plantpb_pb2.DEAD:
