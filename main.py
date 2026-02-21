@@ -22,7 +22,7 @@ from .services.state_store import QFarmStateStore
     "astrbot_plugin_qfarm",
     "riddle",
     "AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 实现）",
-    "2.0.1",
+    "2.0.2",
     "https://github.com/R1ddle1337/astrbot_plugin_qfarm",
 )
 class QFarmPlugin(Star):
@@ -124,7 +124,8 @@ class QFarmPlugin(Star):
         logger.info("[qfarm] 插件已卸载")
 
     @filter.command("qfarm", alias={"农场"})
-    async def qfarm_entry(self, event: AstrMessageEvent):
+    async def qfarm_entry(self, event: AstrMessageEvent, *args: Any, **kwargs: Any):
+        _ = (args, kwargs)
         if self.router is None:
             yield event.plain_result("qfarm 插件尚未初始化。")
             return

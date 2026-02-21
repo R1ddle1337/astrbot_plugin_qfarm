@@ -623,6 +623,9 @@ class QFarmRuntimeManager:
             "userservice.login error=",
             "账号不存在",
             "account_id",
+            "invalid response status",
+            "status', url='wss://",
+            " 400",
         )
         if any(word in text for word in non_retryable):
             return False

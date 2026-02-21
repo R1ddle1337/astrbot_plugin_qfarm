@@ -147,6 +147,12 @@ async def test_start_account_non_retryable_error(build_manager):
     assert status["startRetryCount"] == 1
 
 
+def test_invalid_response_status_400_is_non_retryable(build_manager):
+    manager = build_manager(max_attempts=5)
+    text = "websocket connect failed: 400, message='Invalid response status'"
+    assert manager._is_retryable_start_error(text) is False
+
+
 @pytest.mark.asyncio
 async def test_auto_start_isolated_per_account(build_manager):
     manager = build_manager(max_attempts=2)

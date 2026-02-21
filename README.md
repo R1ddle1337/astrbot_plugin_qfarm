@@ -154,7 +154,10 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.0.1
+- Current release: v2.0.2
+- 2026-02-21 v2.0.2
+- Fix: command handler now accepts AstrBot extra positional args (avoid TypeError).
+- Fix: websocket 400 invalid response status is classified as non-retryable start error.
 - 2026-02-21 v2.0.1
 - Fix: mature lands are harvestable even when stealable=false.
 - Add: farm analyze/harvest debug logs for troubleshooting.
