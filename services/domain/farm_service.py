@@ -244,6 +244,11 @@ class FarmService:
         for land in lands:
             land_id = _to_int(land.id, 0)
             level = _to_int(land.level, 0)
+            max_level = _to_int(land.max_level, 0)
+            lands_level = _to_int(land.lands_level, 0)
+            land_size = _to_int(land.land_size, 0)
+            could_unlock = bool(land.could_unlock)
+            could_upgrade = bool(land.could_upgrade)
             if not bool(land.unlocked):
                 details.append(
                     {
@@ -253,16 +258,25 @@ class FarmService:
                         "plantName": "",
                         "phaseName": "未解锁",
                         "level": level,
+                        "maxLevel": max_level,
+                        "landsLevel": lands_level,
+                        "landSize": land_size,
+                        "couldUnlock": could_unlock,
+                        "couldUpgrade": could_upgrade,
+                        "seedId": 0,
+                        "seedImage": "",
+                        "stealable": False,
+                        "matureInSec": 0,
                         "needWater": False,
                         "needWeed": False,
                         "needBug": False,
                     }
                 )
-                if bool(land.could_unlock):
+                if could_unlock:
                     unlockable.append(land_id)
                 continue
 
-            if bool(land.could_upgrade):
+            if could_upgrade:
                 upgradable.append(land_id)
 
             if not land.HasField("plant") or not land.plant.phases:
@@ -274,6 +288,15 @@ class FarmService:
                         "plantName": "",
                         "phaseName": "空地",
                         "level": level,
+                        "maxLevel": max_level,
+                        "landsLevel": lands_level,
+                        "landSize": land_size,
+                        "couldUnlock": could_unlock,
+                        "couldUpgrade": could_upgrade,
+                        "seedId": 0,
+                        "seedImage": "",
+                        "stealable": False,
+                        "matureInSec": 0,
                         "needWater": False,
                         "needWeed": False,
                         "needBug": False,
@@ -286,10 +309,16 @@ class FarmService:
             phase = self._current_phase(plant, now)
             phase_val = _to_int(phase.phase, 0) if phase else 0
             phase_name = PHASE_NAMES.get(phase_val, "未知")
-            plant_name = self.config_data.get_plant_name(_to_int(plant.id, 0))
-            need_w = _to_int(plant.dry_num, 0) > 0
-            need_g = len(list(plant.weed_owners)) > 0
-            need_b = len(list(plant.insect_owners)) > 0
+            plant_id = _to_int(plant.id, 0)
+            plant_name = self.config_data.get_plant_name(plant_id)
+            seed_id = self.config_data.get_seed_id_by_plant(plant_id)
+            seed_image = self.config_data.get_seed_image(seed_id) if seed_id > 0 else ""
+            phase_dry_time = _to_time_sec(phase.dry_time) if phase else 0
+            phase_weed_time = _to_time_sec(phase.weeds_time) if phase else 0
+            phase_bug_time = _to_time_sec(phase.insect_time) if phase else 0
+            need_w = _to_int(plant.dry_num, 0) > 0 or (phase_dry_time > 0 and phase_dry_time <= now)
+            need_g = len(list(plant.weed_owners)) > 0 or (phase_weed_time > 0 and phase_weed_time <= now)
+            need_b = len(list(plant.insect_owners)) > 0 or (phase_bug_time > 0 and phase_bug_time <= now)
             mature_in_sec = 0
 
             if need_w:
@@ -319,6 +348,14 @@ class FarmService:
                     "plantName": plant_name,
                     "phaseName": phase_name,
                     "level": level,
+                    "maxLevel": max_level,
+                    "landsLevel": lands_level,
+                    "landSize": land_size,
+                    "couldUnlock": could_unlock,
+                    "couldUpgrade": could_upgrade,
+                    "seedId": seed_id,
+                    "seedImage": seed_image,
+                    "stealable": bool(plant.stealable),
                     "needWater": need_w,
                     "needWeed": need_g,
                     "needBug": need_b,

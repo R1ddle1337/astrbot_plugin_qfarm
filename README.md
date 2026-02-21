@@ -48,6 +48,8 @@ pip install -r requirements.txt
 - 已补齐 `invite.js` 对应 Python 逻辑（`services/domain/invite_service.py`）：
 仅 `wx` 平台启用，读取插件数据目录 `share.txt`，调用 `UserService.ReportArkClick`。
 - 已补齐配置目录探测：自动优先识别 `qqfarm文档`，并兼容历史目录名差异。
+- 已补齐 `farm.js` 的自动解锁语义：`runFarmOperation(all|upgrade)` 会先尝试解锁可解锁土地，再执行升级。
+- 已补齐农田状态判定的时间触发语义：`dry_time/weeds_time/insect_time` 到期也会触发浇水/除草/除虫需求。
 
 ## 连写命令兼容（新增）
 
@@ -171,7 +173,12 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.1.0
+- Current release: v2.1.1
+- 2026-02-21 v2.1.1
+- Feat: align farm runtime with Node unlock flow (`all|upgrade` now unlocks `unlockable` lands before upgrades).
+- Fix: align land-analyze flags with Node phase-time semantics (`dry_time/weeds_time/insect_time` triggers).
+- Improve: land detail now includes `seedId/seedImage/couldUnlock/couldUpgrade/maxLevel/landsLevel/landSize`.
+- Test: add phase-time trigger regression and runtime unlock-flow regression.
 - 2026-02-21 v2.1.0
 - Feat: add Python InviteService parity (`share.txt` + `ReportArkClick`, wx-only).
 - Fix: robust qfarm docs path resolution to avoid garbled-dir config load failures.

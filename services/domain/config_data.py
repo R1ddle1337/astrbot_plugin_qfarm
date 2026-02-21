@@ -154,6 +154,12 @@ class GameConfigData:
         plant = self.plant_by_id.get(int(plant_id))
         return str(plant.get("name")) if plant else f"植物{plant_id}"
 
+    def get_seed_id_by_plant(self, plant_id: int) -> int:
+        plant = self.plant_by_id.get(int(plant_id))
+        if not plant:
+            return 0
+        return _to_int(plant.get("seed_id"), 0)
+
     def get_all_seeds(self, current_level: int) -> list[SeedInfo]:
         _ = current_level
         rows: list[SeedInfo] = []

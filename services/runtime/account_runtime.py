@@ -438,6 +438,23 @@ class AccountRuntime:
                 actions.append(f"种植{planted}")
 
         if mode == "upgrade" or (mode == "all" and self._automation().get("land_upgrade", True)):
+            unlocked = 0
+            for land_id in analyzed.unlockable:
+                try:
+                    await self.farm.unlock_land(land_id, False)
+                    unlocked += 1
+                except Exception as e:
+                    self._debug_log(
+                        "farm",
+                        f"unlock failed: {e}",
+                        module="farm",
+                        event="unlock_failed",
+                        landId=land_id,
+                    )
+                await asyncio.sleep(0.2)
+            if unlocked > 0:
+                actions.append(f"解锁{unlocked}")
+
             upgraded = 0
             for land_id in analyzed.upgradable:
                 try:

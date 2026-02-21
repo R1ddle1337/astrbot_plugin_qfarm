@@ -12,6 +12,7 @@ from astrbot_plugin_qfarm.services.runtime.account_runtime import AccountRuntime
 class _FakeFarm:
     def __init__(self) -> None:
         self.harvest_calls: list[tuple[list[int], int]] = []
+        self.unlock_calls: list[tuple[int, bool]] = []
 
     async def get_all_lands(self, host_gid: int = 0) -> SimpleNamespace:
         _ = host_gid
@@ -50,6 +51,10 @@ class _FakeFarm:
 
     async def upgrade_land(self, land_id: int):
         _ = land_id
+        return None
+
+    async def unlock_land(self, land_id: int, do_shared: bool = False):
+        self.unlock_calls.append((int(land_id), bool(do_shared)))
         return None
 
 
@@ -121,6 +126,45 @@ async def test_do_farm_operation_all_continues_when_clear_step_failed():
     runtime._auto_plant.assert_awaited_once_with([5], [6])
     runtime._auto_sell.assert_awaited_once()
     assert runtime.operations.get("harvest") == 1
+    assert result["hadWork"] is True
+
+
+@pytest.mark.asyncio
+async def test_do_farm_operation_all_includes_unlock_before_upgrade():
+    class _FarmUnlockable(_FakeFarm):
+        def analyze_lands(self, lands):
+            _ = lands
+            return LandAnalyzeResult(
+                harvestable=[],
+                growing=[],
+                empty=[],
+                dead=[],
+                need_water=[],
+                need_weed=[],
+                need_bug=[],
+                unlockable=[8, 9],
+                upgradable=[10],
+                lands_detail=[],
+            )
+
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.account = {"id": "acc-1"}
+    runtime.user_state = {"gid": 9527}
+    runtime.settings = {"automation": {"land_upgrade": True, "sell": True}}
+    runtime.operations = {}
+    runtime.logger = None
+    runtime.log_callback = None
+    runtime.farm = _FarmUnlockable()
+    runtime.friend = _FakeFriend()
+    runtime._auto_plant = AsyncMock(return_value=0)  # type: ignore[method-assign]
+    runtime._auto_sell = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    result = await runtime._do_farm_operation("all")
+
+    assert runtime.farm.unlock_calls == [(8, False), (9, False)]
+    assert runtime.operations.get("upgrade") == 1
+    assert "解锁2" in result["actions"]
+    assert "升级1" in result["actions"]
     assert result["hadWork"] is True
 
 
