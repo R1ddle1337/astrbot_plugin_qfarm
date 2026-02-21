@@ -22,7 +22,7 @@ from .services.state_store import QFarmStateStore
     "astrbot_plugin_qfarm",
     "riddle",
     "AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 实现）",
-    "2.0.3",
+    "2.0.4",
     "https://github.com/R1ddle1337/astrbot_plugin_qfarm",
 )
 class QFarmPlugin(Star):
@@ -124,12 +124,17 @@ class QFarmPlugin(Star):
         logger.info("[qfarm] 插件已卸载")
 
     @filter.command("qfarm", alias={"农场"})
-    async def qfarm_entry(self, event: AstrMessageEvent, *args: Any, **kwargs: Any):
-        _ = (args, kwargs)
-        if self.router is None:
-            yield event.plain_result("qfarm 插件尚未初始化。")
+    async def qfarm_entry(self, event: Any = None, *args: Any, **kwargs: Any):
+        current_event = self._resolve_command_event(event, args, kwargs)
+        if current_event is None:
+            logger.error(
+                f"[qfarm] 无法解析命令事件对象，event={type(event)}, args={[type(x) for x in args]}, kwargs={list(kwargs.keys())}"
+            )
             return
-        replies = await self.router.handle(event)
+        if self.router is None:
+            yield current_event.plain_result("qfarm 插件尚未初始化。")
+            return
+        replies = await self.router.handle(current_event)
         for reply in replies:
             rendered = False
             if (
@@ -149,11 +154,11 @@ class QFarmPlugin(Star):
                 if images:
                     rendered = True
                     for image_path in images:
-                        yield event.image_result(image_path)
+                        yield current_event.image_result(image_path)
             if reply.text and not rendered:
-                yield event.plain_result(reply.text)
+                yield current_event.plain_result(reply.text)
             if reply.image_url:
-                yield event.image_result(reply.image_url)
+                yield current_event.image_result(reply.image_url)
 
     async def _send_active_message(self, umo: Any, text: str) -> None:
         chain = MessageChain().message(text)
@@ -265,3 +270,21 @@ class QFarmPlugin(Star):
             return []
         parts = re.split(r"[\s,;，；|]+", text)
         return [item for item in (part.strip() for part in parts) if item]
+
+    def _resolve_command_event(
+        self,
+        primary_event: Any,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> AstrMessageEvent | None:
+        candidates: list[Any] = [primary_event]
+        for key in ("event", "message_event", "msg_event"):
+            if key in kwargs:
+                candidates.append(kwargs.get(key))
+        candidates.extend(args)
+        for item in candidates:
+            if item is None:
+                continue
+            if hasattr(item, "plain_result") and hasattr(item, "image_result"):
+                return item
+        return None

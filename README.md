@@ -154,7 +154,10 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.0.3
+- Current release: v2.0.4
+- 2026-02-21 v2.0.4
+- Fix: command entry now resolves AstrBot event object from mixed callback argument orders.
+- Fix: avoid `QFarmPlugin has no attribute plain_result` when framework passes extra positional args.
 - 2026-02-21 v2.0.3
 - Fix: auto-plant now treats harvested lands as empty targets instead of dead targets.
 - Fix: when `remove_plant` fails on dead land cleanup, planting continues instead of aborting.
