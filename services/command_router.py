@@ -81,7 +81,7 @@ class QFarmCommandRouter:
         "max_fert_profit",
     }
     FERTILIZER_MODES = {"both", "normal", "organic", "none"}
-    AUTOMATION_KEYS = {
+    AUTOMATION_KEY_ORDER = (
         "farm",
         "farm_push",
         "land_upgrade",
@@ -91,7 +91,8 @@ class QFarmCommandRouter:
         "friend_bad",
         "task",
         "sell",
-    }
+    )
+    AUTOMATION_KEYS = set(AUTOMATION_KEY_ORDER)
 
     def __init__(
         self,
@@ -188,6 +189,13 @@ class QFarmCommandRouter:
             return await self._cmd_account(event, user_id, ["停止"])
         if cmd in {"重连", "reconnect"}:
             return await self._cmd_account(event, user_id, ["重连", *args])
+        if cmd in {"全自动", "一键自动化", "autoall"}:
+            if not args:
+                return await self._cmd_automation(user_id, ["全开"])
+            flag = self._parse_bool(args[0])
+            if flag is None:
+                return [RouterReply(text="用法: qfarm 全自动 [开|关]")]
+            return await self._cmd_automation(user_id, ["全开" if flag else "全关"])
         if cmd in {"种满", "种地", "种菜"}:
             return await self._cmd_farm(user_id, ["操作", "plant"])
         if cmd in {"帮助", "help", "h", "?"}:
@@ -505,9 +513,14 @@ class QFarmCommandRouter:
 
     async def _cmd_automation(self, user_id: str, args: list[str]) -> list[RouterReply]:
         if not args:
-            return [RouterReply(text="用法: qfarm 自动化 查看 | 设置 <key> <on|off> | 施肥 <both|normal|organic|none>")]
+            return [RouterReply(text="用法: qfarm 自动化 查看 | 设置 <key> <on|off> | 施肥 <both|normal|organic|none> | 全开|全关")]
         sub = self._token(args[0])
         account_id, _ = await self._require_bound_account(user_id)
+
+        if sub in {"全开", "全启", "全部开启", "一键开启", "allon", "all_on", "onall"}:
+            return await self._set_automation_all(account_id, True)
+        if sub in {"全关", "全停", "全部关闭", "一键关闭", "alloff", "all_off", "offall"}:
+            return await self._set_automation_all(account_id, False)
 
         if sub in {"查看", "view"}:
             settings = await self.api.get_settings(account_id)
@@ -556,6 +569,19 @@ class QFarmCommandRouter:
             return [RouterReply(text=f"施肥模式已更新: {mode}")]
 
         return [RouterReply(text="未知自动化子命令。")]
+
+    async def _set_automation_all(self, account_id: str, enabled: bool) -> list[RouterReply]:
+        updates = {key: bool(enabled) for key in self.AUTOMATION_KEY_ORDER}
+        updates["fertilizer"] = "both" if enabled else "none"
+        await self.api.save_settings(account_id, {"automation": updates})
+        state_text = "开启" if enabled else "关闭"
+        lines = [f"自动化已一键{state_text}。"]
+        lines.append(
+            "已设置: "
+            + " ".join([f"{key}={updates[key]}" for key in self.AUTOMATION_KEY_ORDER])
+            + f" fertilizer={updates['fertilizer']}"
+        )
+        return [RouterReply(text="\n".join(lines))]
 
     async def _cmd_settings(self, user_id: str, args: list[str]) -> list[RouterReply]:
         if not args:
@@ -757,7 +783,7 @@ class QFarmCommandRouter:
             "18) qfarm 背包 查看\n"
             "19) qfarm 分析 [exp|fert|profit|fert_profit|level]\n"
             "20) qfarm 自动化 查看\n"
-            "21) qfarm 自动化 设置 <key> <on|off>\n"
+            "21) qfarm 自动化 设置 <key> <on|off> | 全开|全关\n"
             "22) qfarm 自动化 施肥 <both|normal|organic|none>\n"
             "23) qfarm 设置 策略 <preferred|level|max_exp|max_fert_exp|max_profit|max_fert_profit>\n"
             "24) qfarm 设置 种子 <seedId>\n"
@@ -771,7 +797,7 @@ class QFarmCommandRouter:
             "32) qfarm 白名单 用户 列表|添加|删除 <uid> (超管)\n"
             "33) qfarm 白名单 群 列表|添加|删除 <gid> (超管)\n"
             "\n同样支持中文别名命令: 农场 ..."
-            "\n快捷命令: qfarm 登录 | qfarm 退出登录 | qfarm 启动 | qfarm 停止"
+            "\n快捷命令: qfarm 登录 | qfarm 退出登录 | qfarm 启动 | qfarm 停止 | qfarm 全自动 [开|关]"
             "\n快速播种: qfarm 种满"
             "\n误拼兼容: qfram ..."
         )
@@ -1038,6 +1064,8 @@ class QFarmCommandRouter:
         if cmd in {"好友", "friend"}:
             return len(args) >= 1 and args[0] in {"操作", "op", "operate"}
         if cmd in {"自动化", "automation", "auto", "设置", "setting", "settings", "主题", "theme", "白名单", "whitelist", "调试", "debug"}:
+            return True
+        if cmd in {"全自动", "一键自动化", "autoall"}:
             return True
         return False
 

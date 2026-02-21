@@ -88,3 +88,55 @@ async def test_fertilizer_fallback_to_automation_when_settings_not_applied(tmp_p
     assert replies and "兼容回退已启用" in replies[0].text
     assert api.save_calls == [("acc-1", {"automation": {"fertilizer": "both"}})]
     assert api.automation_calls == [("acc-1", "fertilizer", "both")]
+
+
+@pytest.mark.asyncio
+async def test_automation_all_on_sets_all_keys_and_fertilizer(tmp_path: Path):
+    api = _FakeApi(apply_on_save=True)
+    router = _build_router(tmp_path, api)
+
+    replies = await router._cmd_automation("u1", ["全开"])
+    assert replies and "自动化已一键开启" in replies[0].text
+    assert len(api.save_calls) == 1
+    account_id, payload = api.save_calls[0]
+    assert account_id == "acc-1"
+    automation = payload.get("automation", {})
+    for key in (
+        "farm",
+        "farm_push",
+        "land_upgrade",
+        "friend",
+        "friend_steal",
+        "friend_help",
+        "friend_bad",
+        "task",
+        "sell",
+    ):
+        assert automation.get(key) is True
+    assert automation.get("fertilizer") == "both"
+
+
+@pytest.mark.asyncio
+async def test_automation_all_off_sets_all_keys_and_fertilizer_none(tmp_path: Path):
+    api = _FakeApi(apply_on_save=True)
+    router = _build_router(tmp_path, api)
+
+    replies = await router._cmd_automation("u1", ["全关"])
+    assert replies and "自动化已一键关闭" in replies[0].text
+    assert len(api.save_calls) == 1
+    account_id, payload = api.save_calls[0]
+    assert account_id == "acc-1"
+    automation = payload.get("automation", {})
+    for key in (
+        "farm",
+        "farm_push",
+        "land_upgrade",
+        "friend",
+        "friend_steal",
+        "friend_help",
+        "friend_bad",
+        "task",
+        "sell",
+    ):
+        assert automation.get(key) is False
+    assert automation.get("fertilizer") == "none"

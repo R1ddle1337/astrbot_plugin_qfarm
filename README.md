@@ -42,6 +42,7 @@ pip install -r requirements.txt
 - `qfarm 退出登录` 等价 `qfarm 账号 解绑`
 - `qfarm 启动` 等价 `qfarm 账号 启动`
 - `qfarm 停止` 等价 `qfarm 账号 停止`
+- `qfarm 全自动 开|关` 等价 `qfarm 自动化 全开|全关`
 - `qfarm 种满` 等价 `qfarm 农田 操作 plant`
 
 ## 模块补齐说明（Node -> Python）
@@ -174,7 +175,13 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.1.4
+- Current release: v2.1.5
+- 2026-02-21 v2.1.5
+- Feat: add one-click automation commands `qfarm 自动化 全开|全关`.
+- Feat: add shortcut `qfarm 全自动 [开|关]` (default: 开).
+- Improve: one-click toggle also syncs fertilizer mode (`开 -> both`, `关 -> none`).
+- Test: add one-click automation command routing and payload regression tests.
+- 2026-02-21 v2.1.4
 - 2026-02-21 v2.1.4
 - Improve: planting failures now include per-land error samples (`items=...; map=...`) to avoid empty diagnostics.
 - Improve: auto-plant adds seed-stock precheck before final Plant call and returns explicit guidance when stock is zero.

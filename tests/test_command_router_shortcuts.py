@@ -67,3 +67,23 @@ async def test_dispatch_quick_plant_maps_to_farm_operate_plant(tmp_path: Path):
     await router._dispatch(event=object(), user_id="u1", tokens=["种满"])
 
     router._cmd_farm.assert_awaited_once_with("u1", ["操作", "plant"])
+
+
+@pytest.mark.asyncio
+async def test_dispatch_autoall_default_maps_to_automation_all_on(tmp_path: Path):
+    router = _build_router(tmp_path)
+    router._cmd_automation = AsyncMock(return_value=[RouterReply(text="ok")])  # type: ignore[method-assign]
+
+    await router._dispatch(event=object(), user_id="u1", tokens=["全自动"])
+
+    router._cmd_automation.assert_awaited_once_with("u1", ["全开"])
+
+
+@pytest.mark.asyncio
+async def test_dispatch_autoall_off_maps_to_automation_all_off(tmp_path: Path):
+    router = _build_router(tmp_path)
+    router._cmd_automation = AsyncMock(return_value=[RouterReply(text="ok")])  # type: ignore[method-assign]
+
+    await router._dispatch(event=object(), user_id="u1", tokens=["全自动", "关"])
+
+    router._cmd_automation.assert_awaited_once_with("u1", ["全关"])
