@@ -35,6 +35,13 @@ pip install -r requirements.txt
 
 - `/qfarm ...`
 - `/农场 ...`
+- `/qfram ...`（常见误拼兼容）
+
+快捷入口：
+- `qfarm 登录` 等价 `qfarm 账号 绑定扫码`
+- `qfarm 退出登录` 等价 `qfarm 账号 解绑`
+- `qfarm 启动` 等价 `qfarm 账号 启动`
+- `qfarm 停止` 等价 `qfarm 账号 停止`
 
 ## 连写命令兼容（新增）
 
@@ -158,7 +165,12 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.0.8
+- Current release: v2.0.9
+- 2026-02-21 v2.0.9
+- Fix: farm clear/harvest/upgrade now isolate step failures so one RPC error does not abort the whole cycle.
+- Fix: seed list supports local-config fallback when shop RPC is unavailable.
+- Feat: command usability shortcuts (`登录/退出登录/启动/停止`) and typo alias (`qfram`).
+- Test: add fallback seed listing and farm-cycle failure-isolation regression tests.
 - 2026-02-21 v2.0.8
 - Fix: auto-plant now checks bag seed stock and caps buy count by current gold affordability.
 - Fix: when buy fails after stock check, planting falls back to available seed stock instead of aborting all targets.

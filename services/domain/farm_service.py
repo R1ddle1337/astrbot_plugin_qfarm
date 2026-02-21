@@ -355,7 +355,27 @@ class FarmService:
         }
 
     async def get_available_seeds(self, current_level: int) -> list[dict[str, Any]]:
-        shop = await self.get_shop_info(2)
+        try:
+            shop = await self.get_shop_info(2)
+        except Exception:
+            # 对齐 Node 行为：商店失败时回退本地配置，避免命令/自动化完全不可用。
+            fallback: list[dict[str, Any]] = []
+            for seed in self.config_data.get_all_seeds(current_level):
+                fallback.append(
+                    {
+                        "seedId": _to_int(seed.seed_id, 0),
+                        "goodsId": 0,
+                        "name": str(seed.name or f"seed-{seed.seed_id}"),
+                        "price": _to_int(seed.price, 0),
+                        "requiredLevel": _to_int(seed.required_level, 0),
+                        "locked": False,
+                        "soldOut": False,
+                        "image": str(seed.image or ""),
+                        "unknownMeta": True,
+                    }
+                )
+            fallback.sort(key=lambda x: (x["requiredLevel"], x["seedId"]))
+            return fallback
         rows: list[dict[str, Any]] = []
         for goods in shop.goods_list:
             seed_id = _to_int(goods.item_id, 0)

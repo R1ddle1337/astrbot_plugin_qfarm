@@ -82,6 +82,49 @@ async def test_do_farm_operation_all_triggers_harvest_and_plant_flow():
 
 
 @pytest.mark.asyncio
+async def test_do_farm_operation_all_continues_when_clear_step_failed():
+    class _FarmWithClearFailure(_FakeFarm):
+        async def weed(self, land_ids: list[int], gid: int):
+            _ = (land_ids, gid)
+            raise RuntimeError("weed failed")
+
+        def analyze_lands(self, lands):
+            _ = lands
+            return LandAnalyzeResult(
+                harvestable=[5],
+                growing=[],
+                empty=[6],
+                dead=[],
+                need_water=[],
+                need_weed=[7],
+                need_bug=[],
+                unlockable=[],
+                upgradable=[],
+                lands_detail=[],
+            )
+
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.account = {"id": "acc-1"}
+    runtime.user_state = {"gid": 9527}
+    runtime.settings = {"automation": {"land_upgrade": True, "sell": True}}
+    runtime.operations = {}
+    runtime.logger = None
+    runtime.log_callback = None
+    runtime.farm = _FarmWithClearFailure()
+    runtime.friend = _FakeFriend()
+    runtime._auto_plant = AsyncMock(return_value=1)  # type: ignore[method-assign]
+    runtime._auto_sell = AsyncMock(return_value=None)  # type: ignore[method-assign]
+
+    result = await runtime._do_farm_operation("all")
+
+    assert runtime.farm.harvest_calls == [([5], 9527)]
+    runtime._auto_plant.assert_awaited_once_with([5], [6])
+    runtime._auto_sell.assert_awaited_once()
+    assert runtime.operations.get("harvest") == 1
+    assert result["hadWork"] is True
+
+
+@pytest.mark.asyncio
 async def test_auto_plant_continues_when_remove_plant_failed():
     runtime = AccountRuntime.__new__(AccountRuntime)
     runtime.account = {"id": "acc-1"}

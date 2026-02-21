@@ -344,31 +344,68 @@ class AccountRuntime:
 
         if mode in {"all", "clear"}:
             if analyzed.need_weed:
-                await self.farm.weed(analyzed.need_weed, gid)
-                self._record("weed", len(analyzed.need_weed))
-                actions.append(f"除草{len(analyzed.need_weed)}")
+                try:
+                    await self.farm.weed(analyzed.need_weed, gid)
+                    self._record("weed", len(analyzed.need_weed))
+                    actions.append(f"除草{len(analyzed.need_weed)}")
+                except Exception as e:
+                    self._debug_log(
+                        "farm",
+                        f"weed failed: {e}",
+                        module="farm",
+                        event="weed_failed",
+                        count=len(analyzed.need_weed),
+                    )
             if analyzed.need_bug:
-                await self.farm.bug(analyzed.need_bug, gid)
-                self._record("bug", len(analyzed.need_bug))
-                actions.append(f"除虫{len(analyzed.need_bug)}")
+                try:
+                    await self.farm.bug(analyzed.need_bug, gid)
+                    self._record("bug", len(analyzed.need_bug))
+                    actions.append(f"除虫{len(analyzed.need_bug)}")
+                except Exception as e:
+                    self._debug_log(
+                        "farm",
+                        f"bug failed: {e}",
+                        module="farm",
+                        event="bug_failed",
+                        count=len(analyzed.need_bug),
+                    )
             if analyzed.need_water:
-                await self.farm.water(analyzed.need_water, gid)
-                self._record("water", len(analyzed.need_water))
-                actions.append(f"浇水{len(analyzed.need_water)}")
+                try:
+                    await self.farm.water(analyzed.need_water, gid)
+                    self._record("water", len(analyzed.need_water))
+                    actions.append(f"浇水{len(analyzed.need_water)}")
+                except Exception as e:
+                    self._debug_log(
+                        "farm",
+                        f"water failed: {e}",
+                        module="farm",
+                        event="water_failed",
+                        count=len(analyzed.need_water),
+                    )
 
         harvest_ids = list(analyzed.harvestable if mode in {"all", "harvest"} else [])
         if harvest_ids:
-            await self.farm.harvest(harvest_ids, gid)
-            self._record("harvest", len(harvest_ids))
-            actions.append(f"收获{len(harvest_ids)}")
-            self._debug_log(
-                "农场",
-                f"收获执行完成: count={len(harvest_ids)}",
-                module="farm",
-                event="harvest",
-                count=len(harvest_ids),
-                landIds=list(harvest_ids),
-            )
+            try:
+                await self.farm.harvest(harvest_ids, gid)
+                self._record("harvest", len(harvest_ids))
+                actions.append(f"收获{len(harvest_ids)}")
+                self._debug_log(
+                    "农场",
+                    f"收获执行完成: count={len(harvest_ids)}",
+                    module="farm",
+                    event="harvest",
+                    count=len(harvest_ids),
+                    landIds=list(harvest_ids),
+                )
+            except Exception as e:
+                self._debug_log(
+                    "farm",
+                    f"harvest failed: {e}",
+                    module="farm",
+                    event="harvest_failed",
+                    count=len(harvest_ids),
+                )
+                harvest_ids = []
 
         if mode in {"all", "plant"}:
             # 与 Node 原逻辑保持一致：收获后的地块也走 remove->plant 流程
@@ -382,8 +419,17 @@ class AccountRuntime:
         if mode == "upgrade" or (mode == "all" and self._automation().get("land_upgrade", True)):
             upgraded = 0
             for land_id in analyzed.upgradable:
-                await self.farm.upgrade_land(land_id)
-                upgraded += 1
+                try:
+                    await self.farm.upgrade_land(land_id)
+                    upgraded += 1
+                except Exception as e:
+                    self._debug_log(
+                        "farm",
+                        f"upgrade failed: {e}",
+                        module="farm",
+                        event="upgrade_failed",
+                        landId=land_id,
+                    )
                 await asyncio.sleep(0.2)
             if upgraded > 0:
                 self._record("upgrade", upgraded)

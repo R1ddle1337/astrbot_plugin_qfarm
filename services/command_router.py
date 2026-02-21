@@ -121,11 +121,16 @@ class QFarmCommandRouter:
 
     async def handle(self, event: Any) -> list[RouterReply]:
         tokens = tokenize_command(getattr(event, "message_str", ""))
-        if tokens and self._token(tokens[0]) in {"qfarm", "农场"}:
+        if tokens and self._token(tokens[0]) in {"qfarm", "qfram", "农场"}:
             tokens = tokens[1:]
-        elif tokens and str(tokens[0]).strip().lower().startswith("qfarm"):
+        elif tokens and (
+            str(tokens[0]).strip().lower().startswith("qfarm")
+            or str(tokens[0]).strip().lower().startswith("qfram")
+        ):
             merged = str(tokens[0]).strip()
-            suffix = merged[5:].strip()
+            lowered = merged.lower()
+            base_len = 5 if lowered.startswith("qfarm") else 5
+            suffix = merged[base_len:].strip()
             if suffix:
                 tokens = [suffix, *tokens[1:]]
 
@@ -171,6 +176,18 @@ class QFarmCommandRouter:
     async def _dispatch(self, event: Any, user_id: str, tokens: list[str]) -> list[RouterReply]:
         cmd = self._token(tokens[0])
         args = tokens[1:]
+        if cmd in {"登录", "login", "signin"}:
+            if args and self._token(args[0]) == "code" and len(args) >= 2:
+                return await self._cmd_account(event, user_id, ["绑定", "code", args[1], *args[2:]])
+            return await self._cmd_account(event, user_id, ["绑定扫码"])
+        if cmd in {"退出登录", "logout", "signout"}:
+            return await self._cmd_account(event, user_id, ["解绑"])
+        if cmd in {"启动", "start"}:
+            return await self._cmd_account(event, user_id, ["启动"])
+        if cmd in {"停止", "stop"}:
+            return await self._cmd_account(event, user_id, ["停止"])
+        if cmd in {"重连", "reconnect"}:
+            return await self._cmd_account(event, user_id, ["重连", *args])
         if cmd in {"帮助", "help", "h", "?"}:
             return [RouterReply(text=self._help_text())]
         if cmd in {"服务", "service"}:
@@ -752,6 +769,8 @@ class QFarmCommandRouter:
             "32) qfarm 白名单 用户 列表|添加|删除 <uid> (超管)\n"
             "33) qfarm 白名单 群 列表|添加|删除 <gid> (超管)\n"
             "\n同样支持中文别名命令: 农场 ..."
+            "\n快捷命令: qfarm 登录 | qfarm 退出登录 | qfarm 启动 | qfarm 停止"
+            "\n误拼兼容: qfram ..."
         )
 
     async def _start_qr_bind(self, event: Any, user_id: str) -> list[RouterReply]:
