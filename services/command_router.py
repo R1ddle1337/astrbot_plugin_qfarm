@@ -1431,12 +1431,19 @@ class QFarmCommandRouter:
         text = str(message or "").strip()
         if not text:
             return text
+        lowered = text.lower()
         hints: list[str] = []
         if "未绑定账号" in text or "还没有绑定账号" in text:
             hints.append("建议: qfarm 账号 绑定扫码")
         if "账号未运行" in text:
             hints.append("建议: qfarm 账号 启动")
             hints.append("建议: qfarm 服务 状态")
+        if "请求超时" in text or "request timeout" in lowered or "timed out" in lowered:
+            hints.append("建议: 稍后重试一次")
+            hints.append("建议: qfarm 服务 状态")
+        if "登录凭据可能已失效" in text or "缺少登录凭据" in text:
+            hints.append("建议: qfarm 账号 绑定扫码")
+            hints.append("建议: qfarm 账号 绑定 code <code>")
         if "不在用户白名单" in text:
             hints.append("建议: 联系超管执行 qfarm 白名单 用户 添加 <你的QQ号>")
         if "不在群白名单" in text:
@@ -1480,8 +1487,6 @@ class QFarmCommandRouter:
             self.logger.warning(message)
         elif self.logger and hasattr(self.logger, "warn"):
             self.logger.warn(message)
-        else:
-            print(message)
 
 
 

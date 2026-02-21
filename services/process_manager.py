@@ -25,6 +25,8 @@ class NodeProcessManager:
         auto_start_concurrency: int = 5,
         persist_runtime_logs: bool = True,
         runtime_log_max_entries: int = 3000,
+        runtime_log_flush_interval_sec: float = 2.0,
+        runtime_log_flush_batch: int = 80,
         managed_mode: bool = True,
         logger: Any | None = None,
     ) -> None:
@@ -43,6 +45,8 @@ class NodeProcessManager:
             auto_start_concurrency=auto_start_concurrency,
             persist_runtime_logs=persist_runtime_logs,
             runtime_log_max_entries=runtime_log_max_entries,
+            runtime_log_flush_interval_sec=runtime_log_flush_interval_sec,
+            runtime_log_flush_batch=runtime_log_flush_batch,
             logger=logger,
         )
 

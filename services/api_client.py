@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from .runtime.runtime_manager import QFarmRuntimeManager
@@ -10,9 +11,15 @@ class QFarmApiError(RuntimeError):
 
 
 class QFarmApiClient:
-    def __init__(self, backend: QFarmRuntimeManager, logger: Any | None = None) -> None:
+    def __init__(
+        self,
+        backend: QFarmRuntimeManager,
+        logger: Any | None = None,
+        request_timeout_sec: int = 15,
+    ) -> None:
         self.backend = backend
         self.logger = logger
+        self.request_timeout_sec = max(1, int(request_timeout_sec))
 
     async def close(self) -> None:
         return
@@ -90,8 +97,11 @@ class QFarmApiClient:
         return await self._wrap(self.backend.qr_check(code))
 
     async def _wrap(self, awaitable):
+        timeout = max(1, int(self.request_timeout_sec))
         try:
-            return await awaitable
+            return await asyncio.wait_for(awaitable, timeout=timeout)
+        except asyncio.TimeoutError as e:
+            raise QFarmApiError(f"请求超时({timeout}s)，请稍后重试。") from e
         except QFarmApiError:
             raise
         except Exception as e:

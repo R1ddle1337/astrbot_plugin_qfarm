@@ -68,6 +68,8 @@ class QFarmRuntimeManager:
         auto_start_concurrency: int = 5,
         persist_runtime_logs: bool = True,
         runtime_log_max_entries: int = 3000,
+        runtime_log_flush_interval_sec: float = 2.0,
+        runtime_log_flush_batch: int = 80,
         logger: Any | None = None,
     ) -> None:
         self.plugin_root = Path(plugin_root)
@@ -91,6 +93,8 @@ class QFarmRuntimeManager:
         self.auto_start_concurrency = max(1, int(auto_start_concurrency))
         self.persist_runtime_logs = bool(persist_runtime_logs)
         self.runtime_log_max_entries = max(200, int(runtime_log_max_entries))
+        self.runtime_log_flush_interval_sec = max(0.2, float(runtime_log_flush_interval_sec))
+        self.runtime_log_flush_batch = max(1, int(runtime_log_flush_batch))
         self.config_data = GameConfigData(self.plugin_root)
         self.analytics = AnalyticsService(self.config_data)
         self.qr_login = QFarmQRLogin()
@@ -116,6 +120,9 @@ class QFarmRuntimeManager:
         self._runtimes: dict[str, AccountRuntime] = {}
         self._global_logs: list[dict[str, Any]] = []
         self._account_logs: list[dict[str, Any]] = []
+        self._runtime_logs_dirty = False
+        self._runtime_logs_pending = 0
+        self._runtime_logs_last_flush_at = time.monotonic()
         self._load_persisted_runtime_logs()
         self._state_lock = asyncio.Lock()
         self._start_locks: dict[str, asyncio.Lock] = {}
@@ -157,6 +164,7 @@ class QFarmRuntimeManager:
                 await self.stop_account(account_id)
             except Exception:
                 continue
+        self._persist_runtime_logs(force=True)
 
     async def restart(self) -> None:
         await self.stop()
@@ -210,7 +218,7 @@ class QFarmRuntimeManager:
             if account_id:
                 idx = next((i for i, v in enumerate(data["accounts"]) if str(v.get("id")) == account_id), -1)
                 if idx < 0:
-                    raise RuntimeError(f"璐﹀彿涓嶅瓨鍦? {account_id}")
+                    raise RuntimeError(f"账号不存在: {account_id}")
                 current = data["accounts"][idx]
                 merged = {**current, **(payload or {}), "id": account_id, "updatedAt": int(time.time() * 1000)}
                 data["accounts"][idx] = merged
@@ -221,7 +229,7 @@ class QFarmRuntimeManager:
                 data["nextId"] += 1
                 target = {
                     "id": new_id,
-                    "name": str(payload.get("name") or f"璐﹀彿{new_id}"),
+                    "name": str(payload.get("name") or f"账号{new_id}"),
                     "platform": str(payload.get("platform") or "qq"),
                     "code": str(payload.get("code") or ""),
                     "uin": str(payload.get("uin") or ""),
@@ -234,7 +242,12 @@ class QFarmRuntimeManager:
                 action = "add"
             self._accounts = data
             self._save_json_atomic(self.accounts_path, self._accounts)
-            self._add_account_log(action, f"{'鏇存柊' if action == 'update' else '娣诲姞'}璐﹀彿: {target.get('name')}", str(target.get("id")), str(target.get("name")))
+            self._add_account_log(
+                action,
+                f"{'更新' if action == 'update' else '添加'}账号: {target.get('name')}",
+                str(target.get("id")),
+                str(target.get("name")),
+            )
 
         account_id_text = str(target.get("id") or "")
         if action == "update":
@@ -245,8 +258,8 @@ class QFarmRuntimeManager:
         except Exception as e:
             start_error = str(e)
             self._log(
-                "绯荤粺",
-                f"璐﹀彿宸蹭繚瀛橈紝浣嗚嚜鍔ㄥ惎鍔ㄥけ璐? {start_error}",
+                "系统",
+                f"账号已保存，但自动启动失败: {start_error}",
                 is_warn=True,
                 module="system",
                 event="account_start_failed",
@@ -254,7 +267,7 @@ class QFarmRuntimeManager:
             )
             self._add_account_log(
                 "start_failed",
-                f"璐﹀彿淇濆瓨鎴愬姛锛屼絾鑷姩鍚姩澶辫触: {start_error}",
+                f"账号保存成功，但自动启动失败: {start_error}",
                 account_id_text,
                 str(target.get("name") or ""),
             )
@@ -269,7 +282,7 @@ class QFarmRuntimeManager:
     async def delete_account(self, account_id: str | int) -> dict[str, Any]:
         account_id_text = str(account_id or "").strip()
         if not account_id_text:
-            raise RuntimeError("account_id 涓嶈兘涓虹┖")
+            raise RuntimeError("account_id 不能为空")
         await self.stop_account(account_id_text)
         async with self._state_lock:
             data = self._normalize_accounts_data(self._accounts)
@@ -283,7 +296,7 @@ class QFarmRuntimeManager:
                 kept.append(row)
             data["accounts"] = kept
             if before == len(kept):
-                raise RuntimeError(f"璐﹀彿涓嶅瓨鍦? {account_id_text}")
+                raise RuntimeError(f"账号不存在: {account_id_text}")
             if not kept:
                 data["nextId"] = 1
             self._accounts = data
@@ -291,7 +304,7 @@ class QFarmRuntimeManager:
             self._clear_runtime_status(account_id_text)
             self._save_json_atomic(self.accounts_path, self._accounts)
             self._save_json_atomic(self.settings_path, self._settings)
-            self._add_account_log("delete", f"鍒犻櫎璐﹀彿: {target_name or account_id_text}", account_id_text, target_name)
+            self._add_account_log("delete", f"删除账号: {target_name or account_id_text}", account_id_text, target_name)
         return await self.get_accounts()
 
     async def start_account(self, account_id: str | int) -> None:
@@ -349,7 +362,7 @@ class QFarmRuntimeManager:
                     except Exception:
                         pass
                     self._runtimes.pop(account_id_text, None)
-                    last_error = str(e)
+                    last_error = self._normalize_start_error(str(e))
                     can_retry = (
                         attempt < attempts
                         and self._is_retryable_start_error(last_error)
@@ -459,7 +472,7 @@ class QFarmRuntimeManager:
     async def save_settings(self, account_id: str | int, payload: dict[str, Any]) -> dict[str, Any]:
         account_id_text = str(account_id or "").strip()
         if not account_id_text:
-            raise RuntimeError("account_id 涓嶈兘涓虹┖")
+            raise RuntimeError("account_id 不能为空")
         async with self._state_lock:
             current = self._get_account_settings(account_id_text)
             next_cfg = self._merge_settings(current, payload or {})
@@ -496,6 +509,8 @@ class QFarmRuntimeManager:
         return {"ui": {"theme": value}}
 
     async def get_logs(self, account_id: str | int, **filters: Any) -> list[dict[str, Any]]:
+        if self._runtime_logs_dirty:
+            self._persist_runtime_logs()
         account_id_text = str(account_id or "").strip()
         limit = max(1, min(300, _to_int(filters.get("limit"), 100)))
         keyword = str(filters.get("keyword") or "").strip().lower()
@@ -518,6 +533,8 @@ class QFarmRuntimeManager:
         return list(reversed(rows[-limit:]))
 
     async def get_account_logs(self, limit: int = 100) -> list[dict[str, Any]]:
+        if self._runtime_logs_dirty:
+            self._persist_runtime_logs()
         safe = max(1, min(300, _to_int(limit, 100)))
         return list(reversed(self._account_logs[-safe:]))
 
@@ -663,6 +680,19 @@ class QFarmRuntimeManager:
         )
         return any(word in text for word in retryable)
 
+    def _normalize_start_error(self, error: str) -> str:
+        text = str(error or "").strip()
+        lowered = text.lower()
+        if not text:
+            return "未知错误"
+        if "invalid response status" in lowered and "400" in lowered:
+            return "网关鉴权失败(HTTP 400)，登录凭据可能已失效，请重新绑定 code 或重新扫码绑定。"
+        if "missing login code" in lowered or "code 不能为空" in lowered:
+            return "缺少登录凭据 code，请重新绑定 code 或重新扫码绑定。"
+        if ".login error=" in lowered or "userservice.login error=" in lowered:
+            return f"登录鉴权失败，请重新绑定 code 或重新扫码绑定。原始错误: {text}"
+        return text
+
     def _on_runtime_log(self, account_id: str, tag: str, message: str, is_warn: bool, meta: dict[str, Any]) -> None:
         entry = {
             "time": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime()),
@@ -677,10 +707,10 @@ class QFarmRuntimeManager:
         self._global_logs.append(entry)
         if len(self._global_logs) > self.runtime_log_max_entries:
             self._global_logs = self._global_logs[-self.runtime_log_max_entries :]
-        self._persist_runtime_logs()
+        self._schedule_runtime_logs_persist()
 
     async def _on_runtime_kicked(self, account_id: str, reason: str) -> None:
-        self._add_account_log("kickout_delete", f"璐﹀彿琚涪涓嬬嚎锛屽凡鍒犻櫎: {reason}", account_id, "", reason=reason)
+        self._add_account_log("kickout_delete", f"账号被踢下线，已删除: {reason}", account_id, "", reason=reason)
         try:
             await self.delete_account(account_id)
         except Exception:
@@ -699,7 +729,7 @@ class QFarmRuntimeManager:
         account_log_max = max(300, min(2000, self.runtime_log_max_entries))
         if len(self._account_logs) > account_log_max:
             self._account_logs = self._account_logs[-account_log_max:]
-        self._persist_runtime_logs()
+        self._schedule_runtime_logs_persist()
 
     def _log(self, tag: str, message: str, *, is_warn: bool = False, **meta: Any) -> None:
         if self.logger:
@@ -754,9 +784,27 @@ class QFarmRuntimeManager:
             account_logs = account_logs[-account_log_max:]
         self._global_logs = global_logs
         self._account_logs = account_logs
+        self._runtime_logs_dirty = False
+        self._runtime_logs_pending = 0
+        self._runtime_logs_last_flush_at = time.monotonic()
 
-    def _persist_runtime_logs(self) -> None:
+    def _schedule_runtime_logs_persist(self) -> None:
         if not self.persist_runtime_logs:
+            return
+        self._runtime_logs_dirty = True
+        self._runtime_logs_pending += 1
+        elapsed = time.monotonic() - self._runtime_logs_last_flush_at
+        should_flush = (
+            self._runtime_logs_pending >= self.runtime_log_flush_batch
+            or elapsed >= self.runtime_log_flush_interval_sec
+        )
+        if should_flush:
+            self._persist_runtime_logs()
+
+    def _persist_runtime_logs(self, *, force: bool = False) -> None:
+        if not self.persist_runtime_logs:
+            return
+        if not force and not self._runtime_logs_dirty:
             return
         payload = {
             "global": [{k: v for k, v in row.items() if k != "_searchText"} for row in self._global_logs],
@@ -766,6 +814,9 @@ class QFarmRuntimeManager:
             self._save_json_atomic(self.runtime_logs_path, payload)
         except Exception:
             return
+        self._runtime_logs_dirty = False
+        self._runtime_logs_pending = 0
+        self._runtime_logs_last_flush_at = time.monotonic()
 
     @staticmethod
     def _load_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:

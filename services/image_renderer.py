@@ -92,5 +92,3 @@ class QFarmImageRenderer:
             self.logger.warning(message)
         elif self.logger and hasattr(self.logger, "warn"):
             self.logger.warn(message)
-        else:
-            print(message)

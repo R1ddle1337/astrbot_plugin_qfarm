@@ -22,7 +22,7 @@ from .services.state_store import QFarmStateStore
     "astrbot_plugin_qfarm",
     "riddle",
     "AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 实现）",
-    "2.2.1",
+    "2.2.2",
     "https://github.com/R1ddle1337/astrbot_plugin_qfarm",
 )
 class QFarmPlugin(Star):
@@ -47,6 +47,7 @@ class QFarmPlugin(Star):
         platform = self._cfg_str("platform", "qq")
         heartbeat_interval_sec = self._cfg_int("heartbeat_interval_sec", 25)
         rpc_timeout_sec = self._cfg_int("rpc_timeout_sec", 10)
+        request_timeout_sec = self._cfg_int("request_timeout_sec", 15)
         enable_image_render = self._cfg_bool("enable_image_render", True)
         render_service_url = self._cfg_str("render_service_url", "http://172.17.0.1:51234")
         render_timeout_sec = self._cfg_int("render_timeout_sec", 30)
@@ -58,6 +59,8 @@ class QFarmPlugin(Star):
         auto_start_concurrency = self._cfg_int("auto_start_concurrency", 5)
         persist_runtime_logs = self._cfg_bool("persist_runtime_logs", True)
         runtime_log_max_entries = self._cfg_int("runtime_log_max_entries", 3000)
+        runtime_log_flush_interval_sec = self._cfg_float("runtime_log_flush_interval_sec", 2.0)
+        runtime_log_flush_batch = self._cfg_int("runtime_log_flush_batch", 80)
         per_user_inflight_limit = self._cfg_int("per_user_inflight_limit", 1)
 
         self.state_store = QFarmStateStore(
@@ -80,10 +83,16 @@ class QFarmPlugin(Star):
             auto_start_concurrency=auto_start_concurrency,
             persist_runtime_logs=persist_runtime_logs,
             runtime_log_max_entries=runtime_log_max_entries,
+            runtime_log_flush_interval_sec=runtime_log_flush_interval_sec,
+            runtime_log_flush_batch=runtime_log_flush_batch,
             managed_mode=managed_mode,
             logger=logger,
         )
-        self.api_client = QFarmApiClient(self.process_manager.backend, logger=logger)
+        self.api_client = QFarmApiClient(
+            self.process_manager.backend,
+            logger=logger,
+            request_timeout_sec=request_timeout_sec,
+        )
         self.rate_limiter = RateLimiter(
             read_cooldown_sec=self._cfg_float("rate_limit_read_sec", 1.0),
             write_cooldown_sec=self._cfg_float("rate_limit_write_sec", 2.0),

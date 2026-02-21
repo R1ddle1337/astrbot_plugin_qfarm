@@ -162,6 +162,8 @@ pip install -r requirements.txt
 - `auto_start_concurrency`
 - `persist_runtime_logs`
 - `runtime_log_max_entries`
+- `runtime_log_flush_interval_sec`
+- `runtime_log_flush_batch`
 - `per_user_inflight_limit`
 - `request_timeout_sec`
 - `super_admin_ids`
@@ -244,10 +246,21 @@ pip install -r requirements.txt
 - 命中每用户并发护栏（`per_user_inflight_limit`）
 - 等待上一条命令完成，或适当调大该配置
 
+7. 提示 `websocket connect failed: 网关鉴权失败(HTTP 400)`
+- 当前绑定的 `code` 很可能已失效
+- 重新绑定：`qfarm 账号 绑定 code <code>` 或 `qfarm 账号 绑定扫码`
+
 
 ## Version
 
-- Current release: v2.2.1
+- Current release: v2.2.2
+- 2026-02-21 v2.2.2
+- Fix: `request_timeout_sec` now applies to all command-layer API calls.
+- Fix: runtime logs switched to batched/interval flush with forced flush on stop.
+- Fix: normalize websocket 400 auth failures with explicit rebind guidance.
+- Fix: clear historical garbled Chinese texts in runtime/account log messages.
+- Improve: remove `print` fallback, warnings now only go through logger.
+- Test: add timeout / log-flush-policy / utf8-alias / start-error-classification tests.
 - 2026-02-21 v2.2.1
 - UX: unknown commands now provide closest-command suggestions.
 - UX: key failures now include next-step guidance (bind/start/whitelist/seed-stock).

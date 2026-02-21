@@ -79,7 +79,13 @@ class GatewaySession:
                 autoping=True,
             )
         except Exception as e:
+            err_text = str(e or "")
             await self._hard_close()
+            lowered = err_text.lower()
+            if "invalid response status" in lowered and "400" in lowered:
+                raise GatewaySessionError(
+                    "websocket connect failed: 网关鉴权失败(HTTP 400)，登录凭据可能已失效"
+                ) from e
             raise GatewaySessionError(f"websocket connect failed: {e}") from e
         self._recv_task = asyncio.create_task(self._recv_loop())
 

@@ -59,6 +59,16 @@
     "type": "int",
     "default": 3000
   },
+  "runtime_log_flush_interval_sec": {
+    "description": "运行日志落盘最小间隔（秒）",
+    "type": "float",
+    "default": 2.0
+  },
+  "runtime_log_flush_batch": {
+    "description": "运行日志累计多少条后触发一次落盘",
+    "type": "int",
+    "default": 80
+  },
   "per_user_inflight_limit": {
     "description": "每用户同时执行中的命令上限",
     "type": "int",
