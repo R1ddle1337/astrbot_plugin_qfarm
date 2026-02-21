@@ -216,6 +216,11 @@ pip install -r requirements-dev.txt
 - `runtime_logs_v2.json`：运行日志持久化缓存
 - `whitelist.json`：动态白名单
 
+隐私与安全建议：
+
+- 不要提交运行态数据文件（`*_v2.json`、`whitelist.json`、`share.txt`、`*cookie*.json`）。
+- 已在仓库 `.gitignore` 中加入隐私文件忽略规则，默认避免误提交。
+
 ## 图片渲染联动
 
 默认尝试调用 `text2img-service`：
@@ -259,7 +264,10 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.2.4
+- Current release: v2.2.5
+- 2026-02-21 v2.2.5
+- Security: 增加运行态与隐私文件忽略规则（`share.txt`、`*_v2.json`、cookie/session 等）。
+- Security: `qqfarm文档/share.txt` 已改为忽略，避免未来误上传。
 - 2026-02-21 v2.2.4
 - Fix: 修复自动播种在“购买成功但返回无明细”场景下的少种问题（库存回写延迟时按成功购买量兜底）。
 - Fix: `runtime_log_max_entries` 最小值改为 1，日志裁剪配置按用户设置生效。

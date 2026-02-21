@@ -205,3 +205,16 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# qfarm runtime/privacy files
+data/
+**/data/
+qqfarm文档/share.txt
+accounts_v2.json
+bindings_v2.json
+runtime_v2.json
+runtime_logs_v2.json
+state_v2.json
+whitelist.json
+*cookie*.json
+*.session
