@@ -199,12 +199,10 @@ class QFarmCommandRouter:
         except RateLimitError as e:
             return [RouterReply(text=str(e))]
         except QFarmApiError as e:
-            guided = self._append_next_step_guidance(str(e))
-            return [RouterReply(text=f"操作失败: {guided}")]
+            return [RouterReply(text=self._format_failure_message("操作失败", str(e)))]
         except Exception as e:
             self._log_warning(f"命令处理异常: {e}")
-            guided = self._append_next_step_guidance(str(e))
-            return [RouterReply(text=f"命令执行异常: {guided}")]
+            return [RouterReply(text=self._format_failure_message("命令执行异常", str(e), internal=True))]
         finally:
             if lease is not None:
                 lease.release()
@@ -1459,6 +1457,31 @@ class QFarmCommandRouter:
             if hint not in uniq_hints:
                 uniq_hints.append(hint)
         return text + "\n" + "\n".join(uniq_hints)
+
+    def _error_code(self, message: str, *, internal: bool = False) -> str:
+        text = str(message or "").strip().lower()
+        if not text:
+            return "E_UNKNOWN"
+        if internal:
+            return "E_INTERNAL"
+        if "timeout" in text or "超时" in text:
+            return "E_TIMEOUT"
+        if "不在用户白名单" in text or "不在群白名单" in text or "权限不足" in text:
+            return "E_FORBIDDEN"
+        if "未绑定账号" in text or "绑定账号不存在" in text:
+            return "E_NOT_BOUND"
+        if "账号未运行" in text:
+            return "E_NOT_RUNNING"
+        if "登录凭据可能已失效" in text or "网关鉴权失败" in text:
+            return "E_AUTH"
+        if "请求过于频繁" in text:
+            return "E_RATE_LIMIT"
+        return "E_GENERAL"
+
+    def _format_failure_message(self, prefix: str, message: str, *, internal: bool = False) -> str:
+        code = self._error_code(message, internal=internal)
+        guided = self._append_next_step_guidance(message)
+        return f"{prefix}: [{code}] {guided}"
 
     async def _acquire_user_inflight(self, user_id: str) -> bool:
         uid = str(user_id or "").strip()

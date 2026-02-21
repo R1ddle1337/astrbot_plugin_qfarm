@@ -253,7 +253,12 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.2.2
+- Current release: v2.2.3
+- 2026-02-21 v2.2.3
+- Improve: unify command failure template as `前缀 + 错误码 + 引导建议` for easier troubleshooting.
+- Improve: normalize backend exception text with `source=<ExceptionType>` locator.
+- UX: timeout/auth errors now map to stable guidance path in one format.
+- Test: add error-template and api-error-normalization tests.
 - 2026-02-21 v2.2.2
 - Fix: `request_timeout_sec` now applies to all command-layer API calls.
 - Fix: runtime logs switched to batched/interval flush with forced flush on stop.

@@ -105,4 +105,13 @@ class QFarmApiClient:
         except QFarmApiError:
             raise
         except Exception as e:
-            raise QFarmApiError(str(e)) from e
+            raise QFarmApiError(self._normalize_error_message(e)) from e
+
+    @staticmethod
+    def _normalize_error_message(error: Exception) -> str:
+        text = str(error or "").strip()
+        if not text:
+            return f"后端调用失败(source={type(error).__name__})"
+        if len(text) > 360:
+            text = text[:360] + "..."
+        return f"{text} (source={type(error).__name__})"
