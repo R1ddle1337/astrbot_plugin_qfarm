@@ -5,6 +5,10 @@ AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 协议实现）。
 - 作者：`riddle`
 - 仓库：`https://github.com/R1ddle1337/astrbot_plugin_qfarm`
 
+## 致敬
+
+- 本项目在设计与实现思路上参考并致敬：`https://github.com/Penty-d/qq-farm-bot-ui`
+
 ## 核心特性
 
 - 双别名入口：`/qfarm` 与 `/农场`
@@ -154,7 +158,9 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.0.5
+- Current release: v2.0.6
+- 2026-02-21 v2.0.6
+- Docs: add tribute note for `https://github.com/Penty-d/qq-farm-bot-ui`.
 - 2026-02-21 v2.0.5
 - Fix: harden command event resolution to handle AstrBot callback arg-order variance.
 - Fix: add guarded result builders to prevent `plain_result/image_result` attribute crashes.
