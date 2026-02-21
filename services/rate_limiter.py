@@ -60,15 +60,25 @@ class RateLimiter:
                 raise RateLimitError(f"{cmd_type}过于频繁，请 {wait_sec:.1f}s 后再试。")
             tracking[uid] = now + cooldown
 
-        await self._global_sem.acquire()
-
         account_lock = None
-        if is_write and self.account_write_serialized and account_id is not None:
-            aid = str(account_id).strip()
-            if aid:
-                async with self._state_lock:
-                    account_lock = self._account_locks.setdefault(aid, asyncio.Lock())
-                await account_lock.acquire()
+        acquired_global = False
+        acquired_account_lock = False
+        try:
+            await self._global_sem.acquire()
+            acquired_global = True
 
-        return _RateLease(self._global_sem, account_lock)
+            if is_write and self.account_write_serialized and account_id is not None:
+                aid = str(account_id).strip()
+                if aid:
+                    async with self._state_lock:
+                        account_lock = self._account_locks.setdefault(aid, asyncio.Lock())
+                    await account_lock.acquire()
+                    acquired_account_lock = True
 
+            return _RateLease(self._global_sem, account_lock if acquired_account_lock else None)
+        except BaseException:
+            if acquired_account_lock and account_lock and account_lock.locked():
+                account_lock.release()
+            if acquired_global:
+                self._global_sem.release()
+            raise

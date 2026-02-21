@@ -44,11 +44,10 @@ class QFarmStateStore:
 
         self._owner_bindings = self._load_json(
             self.owner_bindings_path,
-            {"owners": {}},
+            {"owners": {}, "accountOwners": {}},
         )
-        if "owners" not in self._owner_bindings or not isinstance(self._owner_bindings["owners"], dict):
-            self._owner_bindings = {"owners": {}}
-            self._save_json(self.owner_bindings_path, self._owner_bindings)
+        self._owner_bindings = self._normalize_owner_bindings(self._owner_bindings)
+        self._save_json(self.owner_bindings_path, self._owner_bindings)
 
         self._whitelist = self._load_json(
             self.whitelist_path,
@@ -113,11 +112,30 @@ class QFarmStateStore:
         aid = _normalize_id(account_id)
         if not uid or not aid:
             raise ValueError("user_id 和 account_id 不能为空")
+        owners = self._owner_bindings.setdefault("owners", {})
+        account_owners = self._owner_bindings.setdefault("accountOwners", {})
+        if not isinstance(owners, dict):
+            owners = {}
+            self._owner_bindings["owners"] = owners
+        if not isinstance(account_owners, dict):
+            account_owners = {}
+            self._owner_bindings["accountOwners"] = account_owners
+
+        existed_owner = _normalize_id(account_owners.get(aid))
+        if existed_owner and existed_owner != uid:
+            raise ValueError(f"账号 {aid} 已被用户 {existed_owner} 绑定，当前策略禁止共享账号")
+
+        old_info = owners.get(uid, {}) if isinstance(owners.get(uid), dict) else {}
+        old_aid = _normalize_id(old_info.get("account_id"))
+        if old_aid and old_aid != aid and _normalize_id(account_owners.get(old_aid)) == uid:
+            account_owners.pop(old_aid, None)
+
         self._owner_bindings["owners"][uid] = {
             "account_id": aid,
             "account_name": str(account_name or ""),
             "updated_at": int(time.time()),
         }
+        self._owner_bindings["accountOwners"][aid] = uid
         self._save_json(self.owner_bindings_path, self._owner_bindings)
 
     def unbind_account(self, user_id: str | int) -> str | None:
@@ -125,6 +143,10 @@ class QFarmStateStore:
         if not uid:
             return None
         info = self._owner_bindings["owners"].pop(uid, None)
+        if isinstance(info, dict):
+            aid = _normalize_id(info.get("account_id"))
+            if aid and _normalize_id(self._owner_bindings.get("accountOwners", {}).get(aid)) == uid:
+                self._owner_bindings["accountOwners"].pop(aid, None)
         self._save_json(self.owner_bindings_path, self._owner_bindings)
         if isinstance(info, dict):
             account_id = _normalize_id(info.get("account_id"))
@@ -231,3 +253,57 @@ class QFarmStateStore:
     def _save_json(self, path: Path, data: dict[str, Any]) -> None:
         with path.open("w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+
+    def _normalize_owner_bindings(self, raw: dict[str, Any]) -> dict[str, Any]:
+        owners_raw = raw.get("owners", {}) if isinstance(raw, dict) else {}
+        account_owners_raw = raw.get("accountOwners", {}) if isinstance(raw, dict) else {}
+        owners: dict[str, dict[str, Any]] = {}
+        account_owner_candidates: dict[str, tuple[str, int]] = {}
+
+        if isinstance(owners_raw, dict):
+            for user_id, info in owners_raw.items():
+                uid = _normalize_id(user_id)
+                if not uid or not isinstance(info, dict):
+                    continue
+                aid = _normalize_id(info.get("account_id"))
+                if not aid:
+                    continue
+                updated_at = int(info.get("updated_at") or 0)
+                owners[uid] = {
+                    "account_id": aid,
+                    "account_name": str(info.get("account_name") or ""),
+                    "updated_at": updated_at,
+                }
+                current = account_owner_candidates.get(aid)
+                if current is None or updated_at >= current[1]:
+                    account_owner_candidates[aid] = (uid, updated_at)
+
+        if isinstance(account_owners_raw, dict):
+            for account_id, user_id in account_owners_raw.items():
+                aid = _normalize_id(account_id)
+                uid = _normalize_id(user_id)
+                if not aid or not uid:
+                    continue
+                if uid not in owners:
+                    continue
+                if _normalize_id(owners[uid].get("account_id")) != aid:
+                    continue
+                updated_at = int(owners[uid].get("updated_at") or 0)
+                current = account_owner_candidates.get(aid)
+                if current is None or updated_at >= current[1]:
+                    account_owner_candidates[aid] = (uid, updated_at)
+
+        normalized_owners: dict[str, dict[str, Any]] = {}
+        normalized_account_owners: dict[str, str] = {}
+        for aid, value in account_owner_candidates.items():
+            uid = _normalize_id(value[0])
+            info = owners.get(uid)
+            if not uid or not isinstance(info, dict):
+                continue
+            normalized_owners[uid] = info
+            normalized_account_owners[aid] = uid
+
+        return {
+            "owners": normalized_owners,
+            "accountOwners": normalized_account_owners,
+        }

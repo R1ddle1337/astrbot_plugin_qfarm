@@ -6,6 +6,23 @@ from typing import Any
 
 ALLOWED_THEMES = {"dark", "light"}
 
+TEXT_ONLY_PREFIXES = (
+    "用法:",
+    "权限不足",
+    "操作失败:",
+    "命令执行异常:",
+    "未知命令:",
+    "请求过于频繁",
+)
+TEXT_ONLY_KEYWORDS = (
+    "建议:",
+    "最近启动错误",
+    "排查",
+    "未绑定账号",
+    "账号未运行",
+    "白名单",
+)
+
 
 def build_qfarm_payload_pages(
     text: str,
@@ -64,6 +81,17 @@ def build_qfarm_payload_pages(
             }
         )
     return payloads
+
+
+def should_render_qfarm_image(text: str) -> bool:
+    content = str(text or "").strip()
+    if not content:
+        return False
+    if any(content.startswith(prefix) for prefix in TEXT_ONLY_PREFIXES):
+        return False
+    if any(keyword in content for keyword in TEXT_ONLY_KEYWORDS):
+        return False
+    return True
 
 
 def _extract_title(lines: list[str]) -> tuple[str, list[str]]:

@@ -66,6 +66,8 @@ class QFarmRuntimeManager:
         start_retry_base_delay_sec: float = 1.0,
         start_retry_max_delay_sec: float = 8.0,
         auto_start_concurrency: int = 5,
+        persist_runtime_logs: bool = True,
+        runtime_log_max_entries: int = 3000,
         logger: Any | None = None,
     ) -> None:
         self.plugin_root = Path(plugin_root)
@@ -87,6 +89,8 @@ class QFarmRuntimeManager:
             float(start_retry_max_delay_sec),
         )
         self.auto_start_concurrency = max(1, int(auto_start_concurrency))
+        self.persist_runtime_logs = bool(persist_runtime_logs)
+        self.runtime_log_max_entries = max(200, int(runtime_log_max_entries))
         self.config_data = GameConfigData(self.plugin_root)
         self.analytics = AnalyticsService(self.config_data)
         self.qr_login = QFarmQRLogin()
@@ -95,6 +99,7 @@ class QFarmRuntimeManager:
         self.settings_path = self.data_dir / "settings_v2.json"
         self.runtime_path = self.data_dir / "runtime_v2.json"
         self.bindings_path = self.data_dir / "bindings_v2.json"
+        self.runtime_logs_path = self.data_dir / "runtime_logs_v2.json"
 
         self._accounts = self._load_json(self.accounts_path, {"accounts": [], "nextId": 1})
         self._settings = self._load_json(
@@ -111,6 +116,7 @@ class QFarmRuntimeManager:
         self._runtimes: dict[str, AccountRuntime] = {}
         self._global_logs: list[dict[str, Any]] = []
         self._account_logs: list[dict[str, Any]] = []
+        self._load_persisted_runtime_logs()
         self._state_lock = asyncio.Lock()
         self._start_locks: dict[str, asyncio.Lock] = {}
 
@@ -230,11 +236,12 @@ class QFarmRuntimeManager:
             self._save_json_atomic(self.accounts_path, self._accounts)
             self._add_account_log(action, f"{'鏇存柊' if action == 'update' else '娣诲姞'}璐﹀彿: {target.get('name')}", str(target.get("id")), str(target.get("name")))
 
+        account_id_text = str(target.get("id") or "")
         if action == "update":
-            await self.stop_account(str(target.get("id")))
+            await self.stop_account(account_id_text)
         start_error = ""
         try:
-            await self.start_account(str(target.get("id")))
+            await self.start_account(account_id_text)
         except Exception as e:
             start_error = str(e)
             self._log(
@@ -243,15 +250,21 @@ class QFarmRuntimeManager:
                 is_warn=True,
                 module="system",
                 event="account_start_failed",
-                accountId=str(target.get("id")),
+                accountId=account_id_text,
             )
             self._add_account_log(
                 "start_failed",
                 f"璐﹀彿淇濆瓨鎴愬姛锛屼絾鑷姩鍚姩澶辫触: {start_error}",
-                str(target.get("id")),
+                account_id_text,
                 str(target.get("name") or ""),
             )
-        return await self.get_accounts()
+        current_account = await self._get_account_view_by_id(account_id_text)
+        return {
+            "action": action,
+            "account": current_account or dict(target),
+            "autoStart": not bool(start_error),
+            "startError": start_error,
+        }
 
     async def delete_account(self, account_id: str | int) -> dict[str, Any]:
         account_id_text = str(account_id or "").strip()
@@ -331,6 +344,10 @@ class QFarmRuntimeManager:
                     )
                     return
                 except Exception as e:
+                    try:
+                        await runtime.stop()
+                    except Exception:
+                        pass
                     self._runtimes.pop(account_id_text, None)
                     last_error = str(e)
                     can_retry = (
@@ -658,8 +675,9 @@ class QFarmRuntimeManager:
         }
         entry["_searchText"] = f"{entry['msg']} {entry['tag']} {json.dumps(entry['meta'], ensure_ascii=False)}".lower()
         self._global_logs.append(entry)
-        if len(self._global_logs) > 1000:
-            self._global_logs.pop(0)
+        if len(self._global_logs) > self.runtime_log_max_entries:
+            self._global_logs = self._global_logs[-self.runtime_log_max_entries :]
+        self._persist_runtime_logs()
 
     async def _on_runtime_kicked(self, account_id: str, reason: str) -> None:
         self._add_account_log("kickout_delete", f"璐﹀彿琚涪涓嬬嚎锛屽凡鍒犻櫎: {reason}", account_id, "", reason=reason)
@@ -678,8 +696,10 @@ class QFarmRuntimeManager:
         }
         row.update(extra)
         self._account_logs.append(row)
-        if len(self._account_logs) > 300:
-            self._account_logs.pop(0)
+        account_log_max = max(300, min(2000, self.runtime_log_max_entries))
+        if len(self._account_logs) > account_log_max:
+            self._account_logs = self._account_logs[-account_log_max:]
+        self._persist_runtime_logs()
 
     def _log(self, tag: str, message: str, *, is_warn: bool = False, **meta: Any) -> None:
         if self.logger:
@@ -692,6 +712,60 @@ class QFarmRuntimeManager:
             except Exception:
                 pass
         self._on_runtime_log("", tag, message, is_warn, meta)
+
+    async def _get_account_view_by_id(self, account_id: str) -> dict[str, Any] | None:
+        data = await self.get_accounts()
+        accounts = data.get("accounts", []) if isinstance(data, dict) else []
+        for row in accounts:
+            if str(row.get("id") or "").strip() == str(account_id or "").strip():
+                return dict(row)
+        return None
+
+    def _load_persisted_runtime_logs(self) -> None:
+        if not self.persist_runtime_logs:
+            return
+        default = {"global": [], "account": []}
+        raw = self._load_json(self.runtime_logs_path, default)
+        global_logs: list[dict[str, Any]] = []
+        account_logs: list[dict[str, Any]] = []
+        for row in raw.get("global", []) if isinstance(raw, dict) else []:
+            if not isinstance(row, dict):
+                continue
+            entry = dict(row)
+            entry["time"] = str(entry.get("time") or "")
+            entry["tag"] = str(entry.get("tag") or "")
+            entry["msg"] = str(entry.get("msg") or "")
+            entry["isWarn"] = bool(entry.get("isWarn"))
+            entry["accountId"] = str(entry.get("accountId") or "")
+            entry["meta"] = dict(entry.get("meta") or {})
+            entry["ts"] = _to_int(entry.get("ts"), 0)
+            entry["_searchText"] = (
+                f"{entry['msg']} {entry['tag']} {json.dumps(entry['meta'], ensure_ascii=False)}".lower()
+            )
+            global_logs.append(entry)
+        for row in raw.get("account", []) if isinstance(raw, dict) else []:
+            if not isinstance(row, dict):
+                continue
+            account_logs.append(dict(row))
+        if len(global_logs) > self.runtime_log_max_entries:
+            global_logs = global_logs[-self.runtime_log_max_entries :]
+        account_log_max = max(300, min(2000, self.runtime_log_max_entries))
+        if len(account_logs) > account_log_max:
+            account_logs = account_logs[-account_log_max:]
+        self._global_logs = global_logs
+        self._account_logs = account_logs
+
+    def _persist_runtime_logs(self) -> None:
+        if not self.persist_runtime_logs:
+            return
+        payload = {
+            "global": [{k: v for k, v in row.items() if k != "_searchText"} for row in self._global_logs],
+            "account": list(self._account_logs),
+        }
+        try:
+            self._save_json_atomic(self.runtime_logs_path, payload)
+        except Exception:
+            return
 
     @staticmethod
     def _load_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:

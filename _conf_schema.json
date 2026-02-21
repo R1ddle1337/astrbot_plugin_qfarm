@@ -49,6 +49,21 @@
     "type": "int",
     "default": 5
   },
+  "persist_runtime_logs": {
+    "description": "是否持久化运行日志到本地文件",
+    "type": "bool",
+    "default": true
+  },
+  "runtime_log_max_entries": {
+    "description": "运行日志最大保留条数（环形裁剪）",
+    "type": "int",
+    "default": 3000
+  },
+  "per_user_inflight_limit": {
+    "description": "每用户同时执行中的命令上限",
+    "type": "int",
+    "default": 1
+  },
   "request_timeout_sec": {
     "description": "命令请求超时（秒）",
     "type": "int",

@@ -352,6 +352,8 @@ class AccountRuntime:
         plant_target_count = 0
         planted_count = 0
         plant_skip_reason = ""
+        harvest_skip_reason = ""
+        no_action_reason = ""
         self._debug_log(
             "农场",
             (
@@ -431,6 +433,8 @@ class AccountRuntime:
                     count=len(harvest_ids),
                 )
                 harvest_ids = []
+        elif mode in {"all", "harvest"}:
+            harvest_skip_reason = "本轮没有成熟地块可收获"
 
         if mode in {"all", "plant"}:
             # 与 Node 原逻辑保持一致：收获后的地块也走 remove->plant 流程
@@ -483,6 +487,21 @@ class AccountRuntime:
 
         if harvest_ids and self._automation().get("sell", True):
             await self._auto_sell()
+        if not actions:
+            if mode == "harvest" and harvest_skip_reason:
+                no_action_reason = harvest_skip_reason
+            elif mode in {"all", "plant"} and plant_skip_reason:
+                no_action_reason = plant_skip_reason
+            else:
+                no_action_reason = "当前地块状态无需执行本轮操作"
+            self._debug_log(
+                "农场",
+                f"本轮无动作: mode={mode}, reason={no_action_reason}",
+                module="farm",
+                event="noop",
+                mode=mode,
+                reason=no_action_reason,
+            )
         return {
             "hadWork": bool(actions),
             "actions": actions,
@@ -501,6 +520,11 @@ class AccountRuntime:
             "plantedCount": planted_count,
             "plantSkipReason": plant_skip_reason,
             "plantFailures": list(getattr(self.farm, "last_plant_failures", []) or [])[:10],
+            "explain": {
+                "harvestSkipReason": harvest_skip_reason,
+                "plantSkipReason": plant_skip_reason,
+                "noActionReason": no_action_reason,
+            },
         }
 
     async def _auto_plant(self, dead_ids: list[int], empty_ids: list[int]) -> int:

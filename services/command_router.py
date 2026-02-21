@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import difflib
 import re
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
@@ -93,6 +94,31 @@ class QFarmCommandRouter:
         "sell",
     )
     AUTOMATION_KEYS = set(AUTOMATION_KEY_ORDER)
+    TOP_COMMAND_HINTS = (
+        "帮助",
+        "服务",
+        "账号",
+        "状态",
+        "农田",
+        "好友",
+        "种子",
+        "背包",
+        "分析",
+        "自动化",
+        "设置",
+        "主题",
+        "日志",
+        "账号日志",
+        "调试",
+        "白名单",
+        "登录",
+        "退出登录",
+        "启动",
+        "停止",
+        "重连",
+        "种满",
+        "全自动",
+    )
 
     def __init__(
         self,
@@ -103,6 +129,7 @@ class QFarmCommandRouter:
         is_super_admin: Callable[[str], bool],
         send_active_message: Callable[[Any, str], Awaitable[None]] | None = None,
         logger: Any | None = None,
+        per_user_inflight_limit: int = 1,
     ) -> None:
         self.api = api_client
         self.state_store = state_store
@@ -112,6 +139,9 @@ class QFarmCommandRouter:
         self.send_active_message = send_active_message
         self.logger = logger
         self._qr_tasks: dict[str, asyncio.Task] = {}
+        self._per_user_inflight_limit = max(1, int(per_user_inflight_limit))
+        self._inflight_lock = asyncio.Lock()
+        self._user_inflight: dict[str, int] = {}
 
     async def shutdown(self) -> None:
         for task in list(self._qr_tasks.values()):
@@ -155,6 +185,9 @@ class QFarmCommandRouter:
         is_write = self._is_write_command(tokens)
         bound_account_for_lock = self.state_store.get_bound_account(user_id) if is_write else None
         lease = None
+        inflight_acquired = await self._acquire_user_inflight(user_id)
+        if not inflight_acquired:
+            return [RouterReply(text="请求过于频繁：你有命令仍在执行中，请稍后再试。")]
         try:
             lease = await self.rate_limiter.acquire(
                 user_id=user_id,
@@ -166,13 +199,16 @@ class QFarmCommandRouter:
         except RateLimitError as e:
             return [RouterReply(text=str(e))]
         except QFarmApiError as e:
-            return [RouterReply(text=f"操作失败: {e}")]
+            guided = self._append_next_step_guidance(str(e))
+            return [RouterReply(text=f"操作失败: {guided}")]
         except Exception as e:
             self._log_warning(f"命令处理异常: {e}")
-            return [RouterReply(text=f"命令执行异常: {e}")]
+            guided = self._append_next_step_guidance(str(e))
+            return [RouterReply(text=f"命令执行异常: {guided}")]
         finally:
             if lease is not None:
                 lease.release()
+            await self._release_user_inflight(user_id)
 
     async def _dispatch(self, event: Any, user_id: str, tokens: list[str]) -> list[RouterReply]:
         cmd = self._token(tokens[0])
@@ -230,7 +266,9 @@ class QFarmCommandRouter:
             return await self._cmd_debug(user_id, args)
         if cmd in {"白名单", "whitelist"}:
             return await self._cmd_whitelist(args)
-        return [RouterReply(text=f"未知命令: {tokens[0]}\n\n{self._help_text()}")]
+        suggest = self._suggest_unknown_command(tokens[0])
+        extra = f"\n{suggest}" if suggest else ""
+        return [RouterReply(text=f"未知命令: {tokens[0]}{extra}\n\n{self._help_text()}")]
 
     async def _cmd_service(self, args: list[str]) -> list[RouterReply]:
         action = self._token(args[0]) if args else "状态"
@@ -806,6 +844,7 @@ class QFarmCommandRouter:
         data = result if isinstance(result, dict) else {}
         actions = [str(v) for v in (data.get("actions") or []) if str(v).strip()]
         summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+        explain = data.get("explain") if isinstance(data.get("explain"), dict) else {}
         lines = [f"农田操作完成: {op_type}"]
         if actions:
             lines.append(f"执行动作: {' / '.join(actions)}")
@@ -837,6 +876,12 @@ class QFarmCommandRouter:
                     lines.append(f"失败示例: 地块#{lid} {err}")
                 elif err:
                     lines.append(f"失败示例: {err}")
+        harvest_skip_reason = str(explain.get("harvestSkipReason") or "").strip()
+        if harvest_skip_reason:
+            lines.append(f"收割说明: {harvest_skip_reason}")
+        no_action_reason = str(explain.get("noActionReason") or "").strip()
+        if no_action_reason:
+            lines.append(f"本轮说明: {no_action_reason}")
         return "\n".join(lines)
 
     async def _start_qr_bind(self, event: Any, user_id: str) -> list[RouterReply]:
@@ -951,34 +996,33 @@ class QFarmCommandRouter:
             }
             if extra_fields:
                 payload.update({k: v for k, v in extra_fields.items() if v is not None and v != ""})
-            await self.api.upsert_account(payload)
-            after_account = await self._fetch_account_by_id(existing_id)
+            result = await self.api.upsert_account(payload)
+            after_account = self._extract_upsert_account(result, fallback_id=existing_id)
+            if not after_account:
+                after_account = await self._fetch_account_by_id(existing_id)
             if not after_account:
                 raise QFarmApiError("更新账号后未找到目标账号，请检查服务状态。")
-            self.state_store.bind_account(user_id, existing_id, after_account.get("name") or "")
+            try:
+                self.state_store.bind_account(user_id, existing_id, after_account.get("name") or "")
+            except ValueError as e:
+                raise QFarmApiError(str(e)) from e
             return after_account
 
         payload = {"name": account_name or f"用户{user_id}", "code": code, "platform": "qq"}
         if extra_fields:
             payload.update({k: v for k, v in extra_fields.items() if v is not None and v != ""})
-        await self.api.upsert_account(payload)
-
-        after_accounts = await self.api.get_accounts()
-        after_list = after_accounts.get("accounts", []) if isinstance(after_accounts, dict) else []
-        before_ids = set(before_map.keys())
-        candidates = [acc for acc in after_list if isinstance(acc, dict) and str(acc.get("id")) not in before_ids]
-        if not candidates:
-            candidates = [acc for acc in after_list if isinstance(acc, dict) and str(acc.get("code") or "") == code]
-        if not candidates:
-            raise QFarmApiError("创建账号后未能识别新账号ID。")
-
-        candidates.sort(key=lambda x: int(x.get("updatedAt") or x.get("createdAt") or 0), reverse=True)
-        created = candidates[0]
+        result = await self.api.upsert_account(payload)
+        created = self._extract_upsert_account(result)
+        if not created:
+            raise QFarmApiError("创建账号后未返回账号信息。")
         account_id = str(created.get("id") or "").strip()
         if not account_id:
             raise QFarmApiError("创建账号后缺少账号ID。")
 
-        self.state_store.bind_account(user_id, account_id, created.get("name") or "")
+        try:
+            self.state_store.bind_account(user_id, account_id, created.get("name") or "")
+        except ValueError as e:
+            raise QFarmApiError(str(e)) from e
         return created
 
     async def _require_bound_account(self, user_id: str) -> tuple[str, dict[str, Any]]:
@@ -1011,6 +1055,21 @@ class QFarmCommandRouter:
                 await asyncio.sleep(1)
         return False, last_error or "未知错误"
 
+    def _extract_upsert_account(self, payload: Any, fallback_id: str | None = None) -> dict[str, Any] | None:
+        if not isinstance(payload, dict):
+            return None
+        account = payload.get("account")
+        if isinstance(account, dict):
+            account_id = str(account.get("id") or "").strip()
+            if account_id:
+                return account
+            if fallback_id:
+                account["id"] = str(fallback_id).strip()
+                return account
+        if fallback_id:
+            return {"id": str(fallback_id).strip()}
+        return None
+
     async def _notify_active(self, umo: Any, text: str) -> None:
         if not self.send_active_message or umo is None:
             return
@@ -1023,9 +1082,9 @@ class QFarmCommandRouter:
         if self.is_super_admin(user_id):
             return True, ""
         if not self.state_store.is_user_allowed(user_id):
-            return False, "权限不足：你不在用户白名单中。"
+            return False, "权限不足：你不在用户白名单中。\n建议: 联系超管执行 qfarm 白名单 用户 添加 <你的QQ号>"
         if group_id and not self.state_store.is_group_allowed(group_id):
-            return False, "权限不足：当前群不在群白名单中。"
+            return False, "权限不足：当前群不在群白名单中。\n建议: 联系超管执行 qfarm 白名单 群 添加 <群号>"
         return True, ""
 
     def _is_super_admin_cmd(self, top: str) -> bool:
@@ -1034,6 +1093,12 @@ class QFarmCommandRouter:
     def _is_write_command(self, tokens: list[str]) -> bool:
         cmd = self._token(tokens[0]) if tokens else ""
         args = [self._token(item) for item in tokens[1:]]
+        if cmd in {"登录", "login", "signin", "退出登录", "logout", "signout"}:
+            return True
+        if cmd in {"启动", "start", "停止", "stop", "重连", "reconnect"}:
+            return True
+        if cmd in {"种满", "种地", "种菜"}:
+            return True
         if cmd in {"服务", "service"}:
             return not args or args[0] not in {"状态", "status"}
         if cmd in {"账号", "account"}:
@@ -1138,6 +1203,7 @@ class QFarmCommandRouter:
         ops = data.get("operations", {}) if isinstance(data, dict) else {}
         exp_progress = data.get("expProgress", {}) if isinstance(data, dict) else {}
         next_checks = data.get("nextChecks", {}) if isinstance(data, dict) else {}
+        automation = data.get("automation", {}) if isinstance(data, dict) else {}
         runtime_state = data.get("runtimeState", "stopped") if isinstance(data, dict) else "stopped"
         retry_count = data.get("startRetryCount", 0) if isinstance(data, dict) else 0
         last_error = str(data.get("lastStartError") or "") if isinstance(data, dict) else ""
@@ -1162,6 +1228,17 @@ class QFarmCommandRouter:
             f"下次好友巡查: {next_checks.get('friendRemainSec', '--')}s",
             f"经验进度: {exp_progress.get('current', 0)}/{exp_progress.get('needed', 0)}",
         ]
+        auto_snapshot = self._format_automation_snapshot(automation if isinstance(automation, dict) else {})
+        if auto_snapshot:
+            lines.append(f"自动化: {auto_snapshot}")
+        farm_remain = self._safe_int(next_checks.get("farmRemainSec"), -1)
+        friend_remain = self._safe_int(next_checks.get("friendRemainSec"), -1)
+        if runtime_state != "running":
+            lines.append("调度说明: 当前账号未运行，自动化不会执行。")
+        elif farm_remain == 0 or friend_remain == 0:
+            lines.append("调度说明: 巡查计时已到，下一轮自动化应在 1 秒内触发。")
+        else:
+            lines.append("调度说明: 倒计时结束后会自动执行对应巡查。")
         if last_error:
             lines.append(f"最近启动错误: {last_error}")
 
@@ -1322,6 +1399,81 @@ class QFarmCommandRouter:
             return int(value)
         except Exception:
             return int(default)
+
+    def _format_automation_snapshot(self, automation: dict[str, Any]) -> str:
+        if not automation:
+            return ""
+        keys = ("farm", "friend", "task", "sell", "farm_push", "land_upgrade")
+        parts: list[str] = []
+        for key in keys:
+            if key not in automation:
+                continue
+            value = automation.get(key)
+            if isinstance(value, bool):
+                parts.append(f"{key}={'on' if value else 'off'}")
+            else:
+                parts.append(f"{key}={value}")
+        fertilizer = str(automation.get("fertilizer") or "").strip()
+        if fertilizer:
+            parts.append(f"fertilizer={fertilizer}")
+        return " ".join(parts)
+
+    def _suggest_unknown_command(self, token: str) -> str:
+        current = str(token or "").strip()
+        if not current:
+            return ""
+        matches = difflib.get_close_matches(current, list(self.TOP_COMMAND_HINTS), n=1, cutoff=0.45)
+        if not matches:
+            return ""
+        return f"你可能想输入: qfarm {matches[0]}"
+
+    def _append_next_step_guidance(self, message: str) -> str:
+        text = str(message or "").strip()
+        if not text:
+            return text
+        hints: list[str] = []
+        if "未绑定账号" in text or "还没有绑定账号" in text:
+            hints.append("建议: qfarm 账号 绑定扫码")
+        if "账号未运行" in text:
+            hints.append("建议: qfarm 账号 启动")
+            hints.append("建议: qfarm 服务 状态")
+        if "不在用户白名单" in text:
+            hints.append("建议: 联系超管执行 qfarm 白名单 用户 添加 <你的QQ号>")
+        if "不在群白名单" in text:
+            hints.append("建议: 联系超管执行 qfarm 白名单 群 添加 <群号>")
+        if "种子" in text and ("库存" in text or "不足" in text or "未设置" in text):
+            hints.append("建议: qfarm 背包 查看")
+            hints.append("建议: qfarm 设置 种子 <seedId>")
+            hints.append("建议: qfarm 种满")
+        if not hints:
+            return text
+        uniq_hints: list[str] = []
+        for hint in hints:
+            if hint not in uniq_hints:
+                uniq_hints.append(hint)
+        return text + "\n" + "\n".join(uniq_hints)
+
+    async def _acquire_user_inflight(self, user_id: str) -> bool:
+        uid = str(user_id or "").strip()
+        if not uid:
+            return False
+        async with self._inflight_lock:
+            current = int(self._user_inflight.get(uid, 0))
+            if current >= self._per_user_inflight_limit:
+                return False
+            self._user_inflight[uid] = current + 1
+            return True
+
+    async def _release_user_inflight(self, user_id: str) -> None:
+        uid = str(user_id or "").strip()
+        if not uid:
+            return
+        async with self._inflight_lock:
+            current = int(self._user_inflight.get(uid, 0))
+            if current <= 1:
+                self._user_inflight.pop(uid, None)
+                return
+            self._user_inflight[uid] = current - 1
 
     def _log_warning(self, message: str) -> None:
         if self.logger and hasattr(self.logger, "warning"):

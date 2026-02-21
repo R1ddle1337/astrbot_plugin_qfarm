@@ -14,7 +14,7 @@ from .services.command_router import QFarmCommandRouter
 from .services.image_renderer import QFarmImageRenderer
 from .services.process_manager import NodeProcessManager
 from .services.rate_limiter import RateLimiter
-from .services.render_payload_builder import build_qfarm_payload_pages
+from .services.render_payload_builder import build_qfarm_payload_pages, should_render_qfarm_image
 from .services.state_store import QFarmStateStore
 
 
@@ -22,7 +22,7 @@ from .services.state_store import QFarmStateStore
     "astrbot_plugin_qfarm",
     "riddle",
     "AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 实现）",
-    "2.1.6",
+    "2.2.1",
     "https://github.com/R1ddle1337/astrbot_plugin_qfarm",
 )
 class QFarmPlugin(Star):
@@ -56,6 +56,9 @@ class QFarmPlugin(Star):
         start_retry_base_delay_sec = self._cfg_float("start_retry_base_delay_sec", 1.0)
         start_retry_max_delay_sec = self._cfg_float("start_retry_max_delay_sec", 8.0)
         auto_start_concurrency = self._cfg_int("auto_start_concurrency", 5)
+        persist_runtime_logs = self._cfg_bool("persist_runtime_logs", True)
+        runtime_log_max_entries = self._cfg_int("runtime_log_max_entries", 3000)
+        per_user_inflight_limit = self._cfg_int("per_user_inflight_limit", 1)
 
         self.state_store = QFarmStateStore(
             data_dir=self.plugin_data_dir,
@@ -75,6 +78,8 @@ class QFarmPlugin(Star):
             start_retry_base_delay_sec=start_retry_base_delay_sec,
             start_retry_max_delay_sec=start_retry_max_delay_sec,
             auto_start_concurrency=auto_start_concurrency,
+            persist_runtime_logs=persist_runtime_logs,
+            runtime_log_max_entries=runtime_log_max_entries,
             managed_mode=managed_mode,
             logger=logger,
         )
@@ -93,6 +98,7 @@ class QFarmPlugin(Star):
             is_super_admin=self._is_super_admin,
             send_active_message=self._send_active_message,
             logger=logger,
+            per_user_inflight_limit=per_user_inflight_limit,
         )
 
         if enable_image_render:
@@ -144,6 +150,7 @@ class QFarmPlugin(Star):
                 and reply.prefer_image
                 and self.image_renderer is not None
                 and self.state_store is not None
+                and should_render_qfarm_image(reply.text)
             ):
                 payloads = build_qfarm_payload_pages(reply.text, theme=self.state_store.get_render_theme("light"))
                 images: list[str] = []

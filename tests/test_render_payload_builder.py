@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from astrbot_plugin_qfarm.services.render_payload_builder import build_qfarm_payload_pages
+from astrbot_plugin_qfarm.services.render_payload_builder import (
+    build_qfarm_payload_pages,
+    should_render_qfarm_image,
+)
 
 
 def test_build_payload_extracts_title_and_stats():
@@ -33,3 +36,9 @@ def test_build_payload_logs_use_small_page_size():
     assert pages[0]["page"] == {"index": 1, "total": 3}
     assert pages[1]["page"] == {"index": 2, "total": 3}
     assert pages[2]["page"] == {"index": 3, "total": 3}
+
+
+def test_should_render_qfarm_image_text_only_cases():
+    assert should_render_qfarm_image("用法: qfarm 状态") is False
+    assert should_render_qfarm_image("操作失败: 账号未运行\n建议: qfarm 账号 启动") is False
+    assert should_render_qfarm_image("【农场状态】\n金币: 1000") is True

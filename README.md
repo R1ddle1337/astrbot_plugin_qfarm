@@ -14,8 +14,11 @@ AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 协议实现）。
 - 双别名入口：`/qfarm` 与 `/农场`
 - 33 条命令全量支持
 - 单用户单账号绑定
+- 单账号禁止多用户共享绑定（防串号）
 - 用户白名单 + 群白名单
 - 分级限流（读写分离）+ 全局并发 + 同账号写串行
+- 每用户并发护栏（防单用户刷命令拖垮群内体验）
+- 运行日志持久化（重载后可追溯）
 - 纯 Python WS + protobuf（无 Node/npm 依赖）
 - 可选接入 `text2img-service` 的 `/api/qfarm` 图片渲染
 
@@ -88,6 +91,13 @@ pip install -r requirements.txt
 - `qfarm 全自动 开|关` 等价 `qfarm 自动化 全开|全关`
 - `qfarm 种满` 等价 `qfarm 农田 操作 plant`
 
+## 多用户并发策略（新增）
+
+- 一个 qfarm 账号只能归属一个用户，禁止共享绑定。
+- 写操作统一走：用户写冷却 + 全局并发 + 同账号写串行。
+- 增加 `per_user_inflight_limit`，限制单用户同时执行中的命令数，避免刷命令影响他人。
+- 快捷写命令（`登录/退出登录/启动/停止/重连/种满`）与标准写命令一致纳入写限流。
+
 ## 模块补齐说明（Node -> Python）
 
 - 已补齐 `invite.js` 对应 Python 逻辑（`services/domain/invite_service.py`）：
@@ -113,6 +123,13 @@ pip install -r requirements.txt
 - `背包查看` = `背包 查看`
 - `种子列表` = `种子 列表`
 - `服务状态|服务启动|服务停止|服务重启` = 对应空格写法
+
+## 体验优化（新增）
+
+- 未知命令会返回最接近的命令建议（例如提示你可能想输入什么）。
+- 关键失败会追加下一步建议（未绑定、未运行、白名单、种子库存不足等）。
+- `状态` 输出增加自动化快照和调度说明，便于判断“为何当前没动作”。
+- 失败/排障类信息默认文本优先，不强制图片渲染，避免关键信息被图片化吞细节。
 
 ## 账号启动重试机制（新增）
 
@@ -143,6 +160,9 @@ pip install -r requirements.txt
 - `start_retry_base_delay_sec`
 - `start_retry_max_delay_sec`
 - `auto_start_concurrency`
+- `persist_runtime_logs`
+- `runtime_log_max_entries`
+- `per_user_inflight_limit`
 - `request_timeout_sec`
 - `super_admin_ids`
 - `allowed_user_ids`
@@ -185,6 +205,7 @@ pip install -r requirements.txt
 - `accounts_v2.json`：账号列表
 - `settings_v2.json`：自动化与策略配置
 - `runtime_v2.json`：运行态与启动状态
+- `runtime_logs_v2.json`：运行日志持久化缓存
 - `whitelist.json`：动态白名单
 
 ## 图片渲染联动
@@ -215,10 +236,33 @@ pip install -r requirements.txt
 - 检查 `enable_image_render=true`
 - 检查 `render_service_url/health`
 
+5. 绑定时报“禁止共享账号”
+- 当前策略为“一个账号仅允许一个用户绑定”
+- 如需切换归属，先由原绑定用户执行：`qfarm 账号 解绑`
+
+6. 提示“仍在执行中”
+- 命中每用户并发护栏（`per_user_inflight_limit`）
+- 等待上一条命令完成，或适当调大该配置
+
 
 ## Version
 
-- Current release: v2.1.6
+- Current release: v2.2.1
+- 2026-02-21 v2.2.1
+- UX: unknown commands now provide closest-command suggestions.
+- UX: key failures now include next-step guidance (bind/start/whitelist/seed-stock).
+- UX: status output adds automation snapshot + scheduler explanation text.
+- UX: diagnostics/failure messages are forced to text-first (skip image rendering).
+- Runtime: farm operation result now includes structured explain fields for no-op diagnosis.
+- 2026-02-21 v2.2.0
+- Fix: shortcut write commands now hit write-rate-limit and account write-serialization.
+- Fix: binding race removed; bind now uses `upsert_account` returned account directly.
+- Fix: enforce exclusive account ownership (no shared account binding across users).
+- Fix: runtime startup failure now calls `runtime.stop()` for cleanup.
+- Fix: rate limiter acquire rollback prevents global semaphore leak on cancellation/errors.
+- Improve: runtime logs persisted to `runtime_logs_v2.json` with ring-buffer trimming.
+- Improve: add per-user in-flight guard to reduce single-user burst impact.
+- Test: add write-classification / exclusive-owner / start-cleanup / cancel-safety / log-persistence / per-user-inflight tests.
 - 2026-02-21 v2.1.6
 - Docs: add end-to-end quick usage workflow (setup, bind, automation, verify).
 - 2026-02-21 v2.1.5
