@@ -57,3 +57,13 @@ async def test_dispatch_logout_shortcut_maps_to_unbind(tmp_path: Path):
     await router._dispatch(event=event, user_id="u1", tokens=["退出登录"])
 
     router._cmd_account.assert_awaited_once_with(event, "u1", ["解绑"])
+
+
+@pytest.mark.asyncio
+async def test_dispatch_quick_plant_maps_to_farm_operate_plant(tmp_path: Path):
+    router = _build_router(tmp_path)
+    router._cmd_farm = AsyncMock(return_value=[RouterReply(text="ok")])  # type: ignore[method-assign]
+
+    await router._dispatch(event=object(), user_id="u1", tokens=["种满"])
+
+    router._cmd_farm.assert_awaited_once_with("u1", ["操作", "plant"])

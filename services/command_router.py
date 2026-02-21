@@ -188,6 +188,8 @@ class QFarmCommandRouter:
             return await self._cmd_account(event, user_id, ["停止"])
         if cmd in {"重连", "reconnect"}:
             return await self._cmd_account(event, user_id, ["重连", *args])
+        if cmd in {"种满", "种地", "种菜"}:
+            return await self._cmd_farm(user_id, ["操作", "plant"])
         if cmd in {"帮助", "help", "h", "?"}:
             return [RouterReply(text=self._help_text())]
         if cmd in {"服务", "service"}:
@@ -392,8 +394,8 @@ class QFarmCommandRouter:
             op_type = self._token(args[1])
             if op_type not in self.FARM_OPS:
                 return [RouterReply(text=f"不支持的农田操作: {op_type}")]
-            await self.api.do_farm_operation(account_id, op_type)
-            return [RouterReply(text=f"农田操作已提交: {op_type}")]
+            result = await self.api.do_farm_operation(account_id, op_type)
+            return [RouterReply(text=self._format_farm_op_result(op_type, result))]
         return [RouterReply(text="未知农田子命令。")]
 
     async def _cmd_friend(self, user_id: str, args: list[str]) -> list[RouterReply]:
@@ -770,8 +772,37 @@ class QFarmCommandRouter:
             "33) qfarm 白名单 群 列表|添加|删除 <gid> (超管)\n"
             "\n同样支持中文别名命令: 农场 ..."
             "\n快捷命令: qfarm 登录 | qfarm 退出登录 | qfarm 启动 | qfarm 停止"
+            "\n快速播种: qfarm 种满"
             "\n误拼兼容: qfram ..."
         )
+
+    def _format_farm_op_result(self, op_type: str, result: dict[str, Any] | None) -> str:
+        data = result if isinstance(result, dict) else {}
+        actions = [str(v) for v in (data.get("actions") or []) if str(v).strip()]
+        summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+        lines = [f"农田操作完成: {op_type}"]
+        if actions:
+            lines.append(f"执行动作: {' / '.join(actions)}")
+        else:
+            lines.append("本次无可执行动作。")
+        if summary:
+            lines.append(
+                "当前地块: "
+                f"收获{summary.get('harvestable', 0)} "
+                f"空地{summary.get('empty', 0)} "
+                f"枯萎{summary.get('dead', 0)} "
+                f"解锁{summary.get('unlockable', 0)} "
+                f"升级{summary.get('upgradable', 0)}"
+            )
+        if op_type in {"all", "plant"}:
+            target = self._safe_int(data.get("plantTargetCount"), 0)
+            planted = self._safe_int(data.get("plantedCount"), 0)
+            if target > 0:
+                lines.append(f"播种结果: {planted}/{target}")
+            reason = str(data.get("plantSkipReason") or "").strip()
+            if reason and planted <= 0:
+                lines.append(f"未种植原因: {reason}")
+        return "\n".join(lines)
 
     async def _start_qr_bind(self, event: Any, user_id: str) -> list[RouterReply]:
         if user_id in self._qr_tasks:
@@ -1247,6 +1278,13 @@ class QFarmCommandRouter:
         if re.fullmatch(r"[A-Za-z0-9_\-]+", text):
             return text.lower()
         return text
+
+    @staticmethod
+    def _safe_int(value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except Exception:
+            return int(default)
 
     def _log_warning(self, message: str) -> None:
         if self.logger and hasattr(self.logger, "warning"):

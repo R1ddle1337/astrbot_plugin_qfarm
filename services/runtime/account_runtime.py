@@ -110,6 +110,7 @@ class AccountRuntime:
         self._last_push_ts = 0.0
         self._invite_processed = False
         self._invite_task: asyncio.Task | None = None
+        self._last_plant_skip_reason = ""
 
     async def start(self) -> None:
         if self.running:
@@ -348,6 +349,9 @@ class AccountRuntime:
         analyzed = self.farm.analyze_lands(lands)
         actions: list[str] = []
         gid = _to_int(self.user_state["gid"])
+        plant_target_count = 0
+        planted_count = 0
+        plant_skip_reason = ""
         self._debug_log(
             "农场",
             (
@@ -433,9 +437,13 @@ class AccountRuntime:
             # 避免部分服务端状态下收获后仍需铲除才能种植的问题。
             dead_ids = list(analyzed.dead) + list(harvest_ids)
             empty_ids = list(analyzed.empty)
+            plant_target_count = len({_to_int(v, 0) for v in dead_ids + empty_ids if _to_int(v, 0) > 0})
             planted = await self._auto_plant(dead_ids, empty_ids)
+            planted_count = max(0, _to_int(planted, 0))
             if planted > 0:
                 actions.append(f"种植{planted}")
+            elif plant_target_count > 0:
+                plant_skip_reason = str(getattr(self, "_last_plant_skip_reason", "") or "存在可种植地块，但本次未完成种植")
 
         if mode == "upgrade" or (mode == "all" and self._automation().get("land_upgrade", True)):
             unlocked = 0
@@ -475,9 +483,27 @@ class AccountRuntime:
 
         if harvest_ids and self._automation().get("sell", True):
             await self._auto_sell()
-        return {"hadWork": bool(actions), "actions": actions}
+        return {
+            "hadWork": bool(actions),
+            "actions": actions,
+            "mode": mode,
+            "summary": {
+                "harvestable": len(analyzed.harvestable),
+                "dead": len(analyzed.dead),
+                "empty": len(analyzed.empty),
+                "needWater": len(analyzed.need_water),
+                "needWeed": len(analyzed.need_weed),
+                "needBug": len(analyzed.need_bug),
+                "unlockable": len(analyzed.unlockable),
+                "upgradable": len(analyzed.upgradable),
+            },
+            "plantTargetCount": plant_target_count,
+            "plantedCount": planted_count,
+            "plantSkipReason": plant_skip_reason,
+        }
 
     async def _auto_plant(self, dead_ids: list[int], empty_ids: list[int]) -> int:
+        self._last_plant_skip_reason = ""
         lands_to_plant = list(empty_ids)
         if dead_ids:
             try:
@@ -492,6 +518,7 @@ class AccountRuntime:
                 )
             lands_to_plant.extend(dead_ids)
         if not lands_to_plant:
+            self._last_plant_skip_reason = "没有可种植的空地或枯萎地块"
             return 0
         unique_lands: list[int] = []
         seen: set[int] = set()
@@ -503,6 +530,7 @@ class AccountRuntime:
             unique_lands.append(lid)
         lands_to_plant = unique_lands
         if not lands_to_plant:
+            self._last_plant_skip_reason = "没有可种植的有效地块"
             return 0
         seed = await self.farm.choose_seed(
             current_level=_to_int(self.user_state["level"]),
@@ -510,6 +538,7 @@ class AccountRuntime:
             preferred_seed_id=_to_int(self.settings.get("preferredSeedId"), 0),
         )
         if not seed:
+            self._last_plant_skip_reason = "没有可用种子（请先执行 qfarm 种子 列表 / qfarm 设置 种子 <seedId>）"
             self._debug_log(
                 "farm",
                 "skip auto plant: no available seed",
@@ -535,6 +564,7 @@ class AccountRuntime:
                 else:
                     can_plant = seed_stock
                 if can_plant <= 0:
+                    self._last_plant_skip_reason = "种子库存不足且金币不足，无法购买种子"
                     self._debug_log(
                         "farm",
                         "skip auto plant: no seed stock and cannot buy",
@@ -588,9 +618,12 @@ class AccountRuntime:
                 if seed_stock is not None:
                     fallback_count = min(seed_stock, len(lands_to_plant))
                     if fallback_count <= 0:
+                        self._last_plant_skip_reason = "购买种子失败且背包无可用种子"
                         return 0
                     lands_to_plant = lands_to_plant[:fallback_count]
         planted = await self.farm.plant(seed_id, lands_to_plant)
+        if planted <= 0 and lands_to_plant:
+            self._last_plant_skip_reason = "种植请求已发送，但未成功种植任何地块"
         if planted > 0:
             self._record("plant", planted)
             mode = str(self._automation().get("fertilizer") or "both")

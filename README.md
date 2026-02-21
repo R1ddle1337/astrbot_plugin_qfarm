@@ -42,6 +42,7 @@ pip install -r requirements.txt
 - `qfarm 退出登录` 等价 `qfarm 账号 解绑`
 - `qfarm 启动` 等价 `qfarm 账号 启动`
 - `qfarm 停止` 等价 `qfarm 账号 停止`
+- `qfarm 种满` 等价 `qfarm 农田 操作 plant`
 
 ## 模块补齐说明（Node -> Python）
 
@@ -173,7 +174,12 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.1.1
+- Current release: v2.1.2
+- 2026-02-21 v2.1.2
+- Feat: add quick command `qfarm 种满` for immediate empty-land planting.
+- Improve: `农田 操作` now returns real execution summary and planting result instead of generic “已提交”.
+- Improve: when planting fails, response includes explicit reason (e.g. no seed stock / insufficient gold).
+- Test: add farm-operation response and quick-plant command regression tests.
 - 2026-02-21 v2.1.1
 - Feat: align farm runtime with Node unlock flow (`all|upgrade` now unlocks `unlockable` lands before upgrades).
 - Fix: align land-analyze flags with Node phase-time semantics (`dry_time/weeds_time/insect_time` triggers).

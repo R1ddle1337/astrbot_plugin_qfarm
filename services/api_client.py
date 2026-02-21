@@ -56,8 +56,8 @@ class QFarmApiClient:
     async def get_bag(self, account_id: str | int) -> dict[str, Any]:
         return await self._wrap(self.backend.get_bag(account_id))
 
-    async def do_farm_operation(self, account_id: str | int, op_type: str) -> None:
-        await self._wrap(self.backend.do_farm_op(account_id, op_type))
+    async def do_farm_operation(self, account_id: str | int, op_type: str) -> dict[str, Any]:
+        return await self._wrap(self.backend.do_farm_op(account_id, op_type))
 
     async def get_analytics(self, account_id: str | int, sort_by: str) -> list[dict[str, Any]]:
         return await self._wrap(self.backend.get_analytics(account_id, sort_by))
