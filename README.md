@@ -174,7 +174,11 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.1.2
+- Current release: v2.1.3
+- 2026-02-21 v2.1.3
+- Fix: align planting RPC with Node semantics (`PlantRequest.items` first, map fallback for compatibility).
+- Fix: when all lands fail to plant, command now surfaces backend error text instead of generic message.
+- Test: add plant-protocol payload regression and plant-failure reason regression tests.
 - 2026-02-21 v2.1.2
 - Feat: add quick command `qfarm 种满` for immediate empty-land planting.
 - Improve: `农田 操作` now returns real execution summary and planting result instead of generic “已提交”.

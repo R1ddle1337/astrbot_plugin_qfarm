@@ -623,7 +623,11 @@ class AccountRuntime:
                     lands_to_plant = lands_to_plant[:fallback_count]
         planted = await self.farm.plant(seed_id, lands_to_plant)
         if planted <= 0 and lands_to_plant:
-            self._last_plant_skip_reason = "种植请求已发送，但未成功种植任何地块"
+            last_error = str(getattr(self.farm, "last_plant_error", "") or "").strip()
+            if last_error:
+                self._last_plant_skip_reason = f"种植失败: {last_error}"
+            else:
+                self._last_plant_skip_reason = "种植请求已发送，但未成功种植任何地块"
         if planted > 0:
             self._record("plant", planted)
             mode = str(self._automation().get("fertilizer") or "both")

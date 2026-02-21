@@ -1,6 +1,6 @@
 name: astrbot_plugin_qfarm
 display_name: QFarm 全量命令版
 desc: AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 协议实现），支持白名单与并发限流
-version: v2.1.2
+version: v2.1.3
 author: riddle
 repo: https://github.com/R1ddle1337/astrbot_plugin_qfarm

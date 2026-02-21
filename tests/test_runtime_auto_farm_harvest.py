@@ -219,6 +219,30 @@ async def test_auto_plant_continues_when_buy_goods_failed():
 
 
 @pytest.mark.asyncio
+async def test_auto_plant_reports_last_plant_error_when_all_failed():
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.account = {"id": "acc-1"}
+    runtime.user_state = {"level": 12}
+    runtime.settings = {"strategy": "preferred", "preferredSeedId": 0, "automation": {"fertilizer": "none"}}
+    runtime.operations = {}
+    runtime.logger = None
+    runtime.log_callback = None
+    runtime.farm = SimpleNamespace(
+        remove_plant=AsyncMock(return_value=None),
+        choose_seed=AsyncMock(return_value={"seedId": 1002, "goodsId": 0, "price": 0}),
+        buy_goods=AsyncMock(return_value=SimpleNamespace(get_items=[])),
+        plant=AsyncMock(return_value=0),
+        fertilize=AsyncMock(return_value=0),
+        last_plant_error="PlantService.Plant error=seed not enough",
+    )
+
+    planted = await runtime._auto_plant([], [9, 10])
+
+    assert planted == 0
+    assert "PlantService.Plant error=seed not enough" in runtime._last_plant_skip_reason
+
+
+@pytest.mark.asyncio
 async def test_auto_plant_caps_buy_count_by_seed_stock_and_gold():
     runtime = AccountRuntime.__new__(AccountRuntime)
     runtime.account = {"id": "acc-1"}

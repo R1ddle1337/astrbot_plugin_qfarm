@@ -67,6 +67,8 @@ class FarmService:
         self.analytics = analytics
         self.logger = logger
         self.rpc_timeout_sec = max(1, int(rpc_timeout_sec))
+        self.last_plant_error = ""
+        self.last_plant_failures: list[dict[str, Any]] = []
 
     async def get_all_lands(self, host_gid: int = 0) -> plantpb_pb2.AllLandsReply:
         req = plantpb_pb2.AllLandsRequest(host_gid=int(host_gid))
@@ -181,21 +183,44 @@ class FarmService:
         )
 
     async def plant(self, seed_id: int, land_ids: list[int]) -> int:
-        # 保留 Node 特殊编码行为对应的 map 结构，一次一块地发送，兼容服务端限制。
+        # 对齐 Node：使用 PlantRequest.items(seed_id + land_ids) 语义发送。
         ok = 0
+        self.last_plant_error = ""
+        self.last_plant_failures = []
         for land_id in land_ids:
-            req = plantpb_pb2.PlantRequest()
-            req.land_and_seed[int(land_id)] = int(seed_id)
+            request_items = plantpb_pb2.PlantRequest()
+            item = request_items.items.add()
+            item.seed_id = int(seed_id)
+            item.land_ids.append(int(land_id))
             try:
                 await self.session.call(
                     "gamepb.plantpb.PlantService",
                     "Plant",
-                    req.SerializeToString(),
+                    request_items.SerializeToString(),
                     timeout_sec=self.rpc_timeout_sec,
                 )
                 ok += 1
-            except Exception:
-                continue
+            except Exception as e_items:
+                # 兼容回退：若 items 失败，再尝试 map 结构。
+                request_map = plantpb_pb2.PlantRequest()
+                request_map.land_and_seed[int(land_id)] = int(seed_id)
+                try:
+                    await self.session.call(
+                        "gamepb.plantpb.PlantService",
+                        "Plant",
+                        request_map.SerializeToString(),
+                        timeout_sec=self.rpc_timeout_sec,
+                    )
+                    ok += 1
+                except Exception as e_map:
+                    self.last_plant_error = str(e_map or e_items)
+                    self.last_plant_failures.append(
+                        {
+                            "landId": int(land_id),
+                            "error": str(e_map or e_items),
+                        }
+                    )
+                    continue
             if len(land_ids) > 1:
                 await asyncio.sleep(0.05)
         return ok
