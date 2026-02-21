@@ -371,8 +371,10 @@ class AccountRuntime:
             )
 
         if mode in {"all", "plant"}:
-            dead_ids = list(analyzed.dead)
-            empty_ids = list(analyzed.empty) + list(harvest_ids)
+            # 与 Node 原逻辑保持一致：收获后的地块也走 remove->plant 流程
+            # 避免部分服务端状态下收获后仍需铲除才能种植的问题。
+            dead_ids = list(analyzed.dead) + list(harvest_ids)
+            empty_ids = list(analyzed.empty)
             planted = await self._auto_plant(dead_ids, empty_ids)
             if planted > 0:
                 actions.append(f"种植{planted}")
@@ -436,7 +438,19 @@ class AccountRuntime:
         goods_id = _to_int(seed.get("goodsId"), 0)
         price = _to_int(seed.get("price"), 0)
         if goods_id > 0 and price > 0:
-            await self.farm.buy_goods(goods_id, len(lands_to_plant), price)
+            try:
+                await self.farm.buy_goods(goods_id, len(lands_to_plant), price)
+            except Exception as e:
+                # 购买失败时仍尝试播种（可能背包已有种子），避免整轮自动化中断。
+                self._debug_log(
+                    "farm",
+                    f"buy seed failed but continue planting: {e}",
+                    module="farm",
+                    event="seed_buy_failed",
+                    seedId=seed_id,
+                    goodsId=goods_id,
+                    targetCount=len(lands_to_plant),
+                )
         planted = await self.farm.plant(seed_id, lands_to_plant)
         if planted > 0:
             self._record("plant", planted)

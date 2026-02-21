@@ -158,7 +158,10 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.0.6
+- Current release: v2.0.7
+- 2026-02-21 v2.0.7
+- Fix: align auto-plant with Node semantics, harvested lands now go through remove->plant flow.
+- Fix: if seed purchase fails, runtime still attempts planting with existing inventory seeds.
 - 2026-02-21 v2.0.6
 - Docs: add tribute note for `https://github.com/Penty-d/qq-farm-bot-ui`.
 - 2026-02-21 v2.0.5

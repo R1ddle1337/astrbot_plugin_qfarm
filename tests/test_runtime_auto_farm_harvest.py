@@ -75,7 +75,7 @@ async def test_do_farm_operation_all_triggers_harvest_and_plant_flow():
     result = await runtime._do_farm_operation("all")
 
     assert runtime.farm.harvest_calls == [([1, 2], 9527)]
-    runtime._auto_plant.assert_awaited_once_with([3], [4, 1, 2])
+    runtime._auto_plant.assert_awaited_once_with([3, 1, 2], [4])
     runtime._auto_sell.assert_awaited_once()
     assert runtime.operations.get("harvest") == 2
     assert result["hadWork"] is True
@@ -104,3 +104,28 @@ async def test_auto_plant_continues_when_remove_plant_failed():
     runtime.farm.remove_plant.assert_awaited_once_with([1, 2])
     runtime.farm.plant.assert_awaited_once_with(1001, [2, 3, 1])
     assert runtime.operations.get("plant") == 2
+
+
+@pytest.mark.asyncio
+async def test_auto_plant_continues_when_buy_goods_failed():
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.account = {"id": "acc-1"}
+    runtime.user_state = {"level": 12}
+    runtime.settings = {"strategy": "preferred", "preferredSeedId": 0, "automation": {"fertilizer": "none"}}
+    runtime.operations = {}
+    runtime.logger = None
+    runtime.log_callback = None
+    runtime.farm = SimpleNamespace(
+        remove_plant=AsyncMock(return_value=None),
+        choose_seed=AsyncMock(return_value={"seedId": 1002, "goodsId": 5566, "price": 88}),
+        buy_goods=AsyncMock(side_effect=RuntimeError("insufficient gold")),
+        plant=AsyncMock(return_value=1),
+        fertilize=AsyncMock(return_value=0),
+    )
+
+    planted = await runtime._auto_plant([], [9])
+
+    assert planted == 1
+    runtime.farm.buy_goods.assert_awaited_once_with(5566, 1, 88)
+    runtime.farm.plant.assert_awaited_once_with(1002, [9])
+    assert runtime.operations.get("plant") == 1
