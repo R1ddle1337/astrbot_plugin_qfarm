@@ -92,7 +92,7 @@ class QFarmRuntimeManager:
         )
         self.auto_start_concurrency = max(1, int(auto_start_concurrency))
         self.persist_runtime_logs = bool(persist_runtime_logs)
-        self.runtime_log_max_entries = max(200, int(runtime_log_max_entries))
+        self.runtime_log_max_entries = max(1, int(runtime_log_max_entries))
         self.runtime_log_flush_interval_sec = max(0.2, float(runtime_log_flush_interval_sec))
         self.runtime_log_flush_batch = max(1, int(runtime_log_flush_batch))
         self.config_data = GameConfigData(self.plugin_root)

@@ -28,6 +28,12 @@ AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 协议实现）。
 pip install -r requirements.txt
 ```
 
+开发/测试环境建议：
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 ## 运行环境
 
 - AstrBot
@@ -253,7 +259,12 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.2.3
+- Current release: v2.2.4
+- 2026-02-21 v2.2.4
+- Fix: 修复自动播种在“购买成功但返回无明细”场景下的少种问题（库存回写延迟时按成功购买量兜底）。
+- Fix: `runtime_log_max_entries` 最小值改为 1，日志裁剪配置按用户设置生效。
+- Test: 全量测试通过（68 passed）。
+- DevEx: 新增 `requirements-dev.txt` 与 `pytest.ini`，统一异步测试运行环境。
 - 2026-02-21 v2.2.3
 - Improve: unify command failure template as `前缀 + 错误码 + 引导建议` for easier troubleshooting.
 - Improve: normalize backend exception text with `source=<ExceptionType>` locator.

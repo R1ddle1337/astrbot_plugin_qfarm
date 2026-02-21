@@ -618,17 +618,28 @@ class AccountRuntime:
                 price=price,
             )
 
+        bought_seed_count = 0
+        optimistic_stock_after_buy: int | None = None
         if goods_id > 0 and price > 0 and buy_count > 0:
             try:
                 buy_reply = await self.farm.buy_goods(goods_id, buy_count, price)
                 if buy_count > 0:
                     self.user_state["gold"] = max(0, _to_int(self.user_state.get("gold"), 0) - (price * buy_count))
+                parsed_buy_count = 0
                 if hasattr(buy_reply, "get_items"):
                     for item in list(getattr(buy_reply, "get_items", []) or []):
                         got_id = _to_int(getattr(item, "id", 0), 0)
+                        got_count = max(0, _to_int(getattr(item, "count", 0), 0))
                         if got_id > 0:
                             seed_id = got_id
-                            break
+                        if got_id <= 0 or got_count <= 0:
+                            continue
+                        if got_id == seed_id:
+                            parsed_buy_count += got_count
+                # 兼容服务端仅返回成功状态、不返回 get_items 明细的情况，避免因库存回写延迟导致少种。
+                bought_seed_count = parsed_buy_count if parsed_buy_count > 0 else buy_count
+                if seed_stock is not None:
+                    optimistic_stock_after_buy = max(0, seed_stock) + max(0, bought_seed_count)
             except Exception as e:
                 # 购买失败时仍尝试播种（可能背包已有种子），避免整轮自动化中断。
                 self._debug_log(
@@ -648,13 +659,16 @@ class AccountRuntime:
                     lands_to_plant = lands_to_plant[:fallback_count]
         post_stock = await self._get_seed_stock(seed_id)
         if post_stock is not None:
-            if post_stock <= 0:
+            effective_stock = max(0, post_stock)
+            if optimistic_stock_after_buy is not None and effective_stock < optimistic_stock_after_buy:
+                effective_stock = optimistic_stock_after_buy
+            if effective_stock <= 0:
                 self._last_plant_skip_reason = (
                     f"背包种子库存为0(seedId={seed_id})，请先检查 `qfarm 背包 查看` 或更换 `qfarm 设置 种子 <seedId>`"
                 )
                 return 0
-            if post_stock < len(lands_to_plant):
-                lands_to_plant = lands_to_plant[:post_stock]
+            if effective_stock < len(lands_to_plant):
+                lands_to_plant = lands_to_plant[:effective_stock]
         planted = await self.farm.plant(seed_id, lands_to_plant)
         if planted <= 0 and lands_to_plant:
             last_error = str(getattr(self.farm, "last_plant_error", "") or "").strip()
