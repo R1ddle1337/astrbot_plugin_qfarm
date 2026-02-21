@@ -314,6 +314,7 @@ class QFarmRuntimeManager:
                     config_data=self.config_data,
                     heartbeat_interval_sec=self.heartbeat_interval_sec,
                     rpc_timeout_sec=self.rpc_timeout_sec,
+                    share_file_path=self.data_dir / "share.txt",
                     logger=self.logger,
                     log_callback=self._on_runtime_log,
                     kicked_callback=self._on_runtime_kicked,

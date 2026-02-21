@@ -9,6 +9,7 @@ from ..domain.analytics_service import AnalyticsService
 from ..domain.config_data import GameConfigData
 from ..domain.farm_service import FarmService
 from ..domain.friend_service import FriendService
+from ..domain.invite_service import InviteService
 from ..domain.task_service import TaskService
 from ..domain.user_service import UserService
 from ..domain.warehouse_service import WarehouseService
@@ -47,6 +48,7 @@ class AccountRuntime:
         config_data: GameConfigData,
         heartbeat_interval_sec: int = 25,
         rpc_timeout_sec: int = 10,
+        share_file_path: Any | None = None,
         logger: Any | None = None,
         log_callback: Any | None = None,
         kicked_callback: Any | None = None,
@@ -67,6 +69,13 @@ class AccountRuntime:
         self.task = TaskService(self.session, rpc_timeout_sec=rpc_timeout_sec)
         self.user = UserService(self.session, rpc_timeout_sec=rpc_timeout_sec)
         self.warehouse = WarehouseService(self.session, config_data, rpc_timeout_sec=rpc_timeout_sec)
+        self.invite = InviteService(
+            self.user,
+            platform=str(self.session_config.platform or self.account.get("platform") or "qq"),
+            share_file_path=share_file_path,
+            logger=logger,
+            log_callback=self._on_invite_log,
+        )
 
         self.running = False
         self.connected = False
@@ -99,6 +108,8 @@ class AccountRuntime:
         self._next_farm_at = 0.0
         self._next_friend_at = 0.0
         self._last_push_ts = 0.0
+        self._invite_processed = False
+        self._invite_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         if self.running:
@@ -126,6 +137,13 @@ class AccountRuntime:
             except Exception:
                 pass
         self._tasks.clear()
+        if self._invite_task and not self._invite_task.done():
+            self._invite_task.cancel()
+            try:
+                await self._invite_task
+            except Exception:
+                pass
+        self._invite_task = None
         await self.session.stop()
 
     async def restart(self) -> None:
@@ -254,6 +272,9 @@ class AccountRuntime:
             "coupon": _to_int(self.user_state["coupon"]),
             "ready": True,
         }
+        if not self._invite_processed:
+            self._invite_processed = True
+            self._invite_task = asyncio.create_task(self._process_invite_codes_once())
         self._reset_schedule()
 
     async def _heartbeat_loop(self) -> None:
@@ -725,6 +746,32 @@ class AccountRuntime:
                     str(message or ""),
                     False,
                     meta,
+                )
+            except Exception:
+                pass
+
+    async def _process_invite_codes_once(self) -> None:
+        try:
+            await self.invite.process_invites()
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            self._debug_log(
+                "invite",
+                f"invite process failed: {e}",
+                module="invite",
+                event="invite_process_failed",
+            )
+
+    def _on_invite_log(self, tag: str, message: str, is_warn: bool, meta: dict[str, Any]) -> None:
+        if self.log_callback:
+            try:
+                self.log_callback(
+                    str((self.account or {}).get("id") or ""),
+                    str(tag or ""),
+                    str(message or ""),
+                    bool(is_warn),
+                    dict(meta or {}),
                 )
             except Exception:
                 pass

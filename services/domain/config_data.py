@@ -25,7 +25,8 @@ class SeedInfo:
 class GameConfigData:
     def __init__(self, plugin_root: Path) -> None:
         self.plugin_root = Path(plugin_root)
-        self.config_dir = self.plugin_root / "qqfarm文档" / "gameConfig"
+        self.docs_root = self._resolve_docs_root(self.plugin_root)
+        self.config_dir = self.docs_root / "gameConfig"
         self.seed_image_dir = self.config_dir / "seed_images_named"
 
         self.role_level: list[dict[str, Any]] = []
@@ -44,6 +45,30 @@ class GameConfigData:
         self.seed_image_by_asset: dict[str, str] = {}
 
         self.reload()
+
+    @staticmethod
+    def _resolve_docs_root(plugin_root: Path) -> Path:
+        preferred = plugin_root / "qqfarm文档"
+        if preferred.exists():
+            return preferred
+
+        # 兼容历史乱码目录名或平台解压差异，只要目录下含 gameConfig 即可。
+        try:
+            children = list(plugin_root.iterdir())
+        except Exception:
+            children = []
+
+        for child in children:
+            if not child.is_dir():
+                continue
+            name = child.name.lower()
+            if not name.startswith("qqfarm"):
+                continue
+            if (child / "gameConfig").exists():
+                return child
+
+        # 回退到标准目录，后续读取 JSON 时会自动降级为空配置。
+        return preferred
 
     def reload(self) -> None:
         self._load_role_level()
@@ -112,7 +137,7 @@ class GameConfigData:
         hours = sec // 3600
         mins = (sec % 3600) // 60
         if mins > 0:
-            return f"{hours}小时{mins}分"
+            return f"{hours}小时{mins}分钟"
         return f"{hours}小时"
 
     def get_seed_image(self, seed_id: int) -> str:
@@ -130,6 +155,7 @@ class GameConfigData:
         return str(plant.get("name")) if plant else f"植物{plant_id}"
 
     def get_all_seeds(self, current_level: int) -> list[SeedInfo]:
+        _ = current_level
         rows: list[SeedInfo] = []
         for plant in self.plants:
             seed_id = _to_int(plant.get("seed_id"), 0)

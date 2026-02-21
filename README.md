@@ -43,6 +43,12 @@ pip install -r requirements.txt
 - `qfarm 启动` 等价 `qfarm 账号 启动`
 - `qfarm 停止` 等价 `qfarm 账号 停止`
 
+## 模块补齐说明（Node -> Python）
+
+- 已补齐 `invite.js` 对应 Python 逻辑（`services/domain/invite_service.py`）：
+仅 `wx` 平台启用，读取插件数据目录 `share.txt`，调用 `UserService.ReportArkClick`。
+- 已补齐配置目录探测：自动优先识别 `qqfarm文档`，并兼容历史目录名差异。
+
 ## 连写命令兼容（新增）
 
 以下连写命令与空格写法等价：
@@ -165,7 +171,11 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.0.9
+- Current release: v2.1.0
+- 2026-02-21 v2.1.0
+- Feat: add Python InviteService parity (`share.txt` + `ReportArkClick`, wx-only).
+- Fix: robust qfarm docs path resolution to avoid garbled-dir config load failures.
+- Test: add docs-root resolution and invite-service regression tests.
 - 2026-02-21 v2.0.9
 - Fix: farm clear/harvest/upgrade now isolate step failures so one RPC error does not abort the whole cycle.
 - Fix: seed list supports local-config fallback when shop RPC is unavailable.
