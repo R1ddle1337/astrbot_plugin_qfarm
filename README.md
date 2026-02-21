@@ -150,3 +150,12 @@ pip install -r requirements.txt
 4. 图片不生效
 - 检查 `enable_image_render=true`
 - 检查 `render_service_url/health`
+
+
+## Version
+
+- Current release: v2.0.1
+- 2026-02-21 v2.0.1
+- Fix: mature lands are harvestable even when stealable=false.
+- Add: farm analyze/harvest debug logs for troubleshooting.
+- Add: regression tests for mature-harvest and runtime farm operation.
