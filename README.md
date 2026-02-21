@@ -31,6 +31,49 @@ pip install -r requirements.txt
 - NapCat（AIOCQHTTP）
 - Python 3.10+
 
+## 使用流程（推荐）
+
+1. 安装依赖并重载插件
+- 在插件目录执行：`pip install -r requirements.txt`
+- 重载插件后先发：`/qfarm 帮助`，确认命令可用
+
+2. 配置超级管理员与白名单
+- 在插件配置里设置：`super_admin_ids`
+- 普通用户使用前，需要加入白名单（超管命令）：
+  - `qfarm 白名单 用户 添加 <QQ号>`
+  - 群内使用还需：`qfarm 白名单 群 添加 <群号>`
+
+3. 绑定账号
+- 推荐扫码：`qfarm 账号 绑定扫码`
+- 绑定成功后可查：`qfarm 账号 查看`
+
+4. 启动账号运行时
+- 手动启动：`qfarm 账号 启动`
+- 查看在线状态：`qfarm 状态`
+
+5. 开启自动化（两种方式）
+- 一键全开：`qfarm 自动化 全开`（或 `qfarm 全自动 开`）
+- 精细开关示例：
+  - `qfarm 自动化 设置 farm on`
+  - `qfarm 自动化 设置 task on`
+  - `qfarm 自动化 设置 sell on`
+  - `qfarm 自动化 施肥 both`
+
+6. 设置自动播种参数（关键）
+- 指定种子：`qfarm 设置 种子 <seedId>`
+- 缩短农场周期（便于观察）：`qfarm 设置 间隔 农场 2 2`
+- 立即种空地：`qfarm 种满`（等价 `qfarm 农田 操作 plant`）
+
+7. 验证自动化是否生效
+- 看农田：`qfarm 农田 查看`
+- 看运行统计：`qfarm 状态`
+- 看运行日志：`qfarm 日志 50`
+
+8. 常用维护
+- 停止账号：`qfarm 账号 停止`
+- 解绑账号：`qfarm 账号 解绑`
+- 一键全关自动化：`qfarm 自动化 全关`
+
 ## 命令入口
 
 - `/qfarm ...`
@@ -175,7 +218,9 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.1.5
+- Current release: v2.1.6
+- 2026-02-21 v2.1.6
+- Docs: add end-to-end quick usage workflow (setup, bind, automation, verify).
 - 2026-02-21 v2.1.5
 - Feat: add one-click automation commands `qfarm 自动化 全开|全关`.
 - Feat: add shortcut `qfarm 全自动 [开|关]` (default: 开).
