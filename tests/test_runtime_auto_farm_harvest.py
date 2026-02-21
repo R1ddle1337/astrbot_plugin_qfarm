@@ -129,3 +129,32 @@ async def test_auto_plant_continues_when_buy_goods_failed():
     runtime.farm.buy_goods.assert_awaited_once_with(5566, 1, 88)
     runtime.farm.plant.assert_awaited_once_with(1002, [9])
     assert runtime.operations.get("plant") == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_plant_caps_buy_count_by_seed_stock_and_gold():
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.account = {"id": "acc-1"}
+    runtime.user_state = {"level": 30, "gold": 199}
+    runtime.settings = {"strategy": "preferred", "preferredSeedId": 0, "automation": {"fertilizer": "none"}}
+    runtime.operations = {}
+    runtime.logger = None
+    runtime.log_callback = None
+    runtime.warehouse = SimpleNamespace(
+        get_bag=AsyncMock(return_value="bag"),
+        get_bag_items=lambda _bag: [SimpleNamespace(id=30001, count=1)],
+    )
+    runtime.farm = SimpleNamespace(
+        remove_plant=AsyncMock(return_value=None),
+        choose_seed=AsyncMock(return_value={"seedId": 30001, "goodsId": 5566, "price": 100}),
+        buy_goods=AsyncMock(return_value=SimpleNamespace(get_items=[])),
+        plant=AsyncMock(return_value=2),
+        fertilize=AsyncMock(return_value=0),
+    )
+
+    planted = await runtime._auto_plant([], [11, 12, 13, 14])
+
+    assert planted == 2
+    runtime.farm.buy_goods.assert_awaited_once_with(5566, 1, 100)
+    runtime.farm.plant.assert_awaited_once_with(30001, [11, 12])
+    assert runtime.operations.get("plant") == 2

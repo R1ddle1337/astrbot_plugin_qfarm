@@ -158,7 +158,11 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.0.7
+- Current release: v2.0.8
+- 2026-02-21 v2.0.8
+- Fix: auto-plant now checks bag seed stock and caps buy count by current gold affordability.
+- Fix: when buy fails after stock check, planting falls back to available seed stock instead of aborting all targets.
+- Add: runtime seed planning debug logs (`seed_plan`, `seed_stock_check_failed`, `seed_unavailable_runtime`).
 - 2026-02-21 v2.0.7
 - Fix: align auto-plant with Node semantics, harvested lands now go through remove->plant flow.
 - Fix: if seed purchase fails, runtime still attempts planting with existing inventory seeds.

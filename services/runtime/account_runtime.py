@@ -437,9 +437,59 @@ class AccountRuntime:
         seed_id = _to_int(seed.get("seedId"), 0)
         goods_id = _to_int(seed.get("goodsId"), 0)
         price = _to_int(seed.get("price"), 0)
-        if goods_id > 0 and price > 0:
+        target_count = len(lands_to_plant)
+        seed_stock = await self._get_seed_stock(seed_id)
+        buy_count = target_count
+        if seed_stock is not None:
+            buy_count = 0
+            if seed_stock < target_count:
+                missing = target_count - seed_stock
+                if goods_id > 0 and price > 0:
+                    affordable = max(0, _to_int(self.user_state.get("gold"), 0) // max(1, price))
+                    buy_count = min(missing, affordable)
+                    can_plant = seed_stock + buy_count
+                else:
+                    can_plant = seed_stock
+                if can_plant <= 0:
+                    self._debug_log(
+                        "farm",
+                        "skip auto plant: no seed stock and cannot buy",
+                        module="farm",
+                        event="seed_unavailable_runtime",
+                        seedId=seed_id,
+                        targetCount=target_count,
+                        stock=seed_stock,
+                        goodsId=goods_id,
+                        price=price,
+                    )
+                    return 0
+                if can_plant < target_count:
+                    lands_to_plant = lands_to_plant[:can_plant]
+                    target_count = len(lands_to_plant)
+            self._debug_log(
+                "farm",
+                f"seed plan resolved: stock={seed_stock}, buy={buy_count}, target={target_count}",
+                module="farm",
+                event="seed_plan",
+                seedId=seed_id,
+                stock=seed_stock,
+                buyCount=buy_count,
+                targetCount=target_count,
+                goodsId=goods_id,
+                price=price,
+            )
+
+        if goods_id > 0 and price > 0 and buy_count > 0:
             try:
-                await self.farm.buy_goods(goods_id, len(lands_to_plant), price)
+                buy_reply = await self.farm.buy_goods(goods_id, buy_count, price)
+                if buy_count > 0:
+                    self.user_state["gold"] = max(0, _to_int(self.user_state.get("gold"), 0) - (price * buy_count))
+                if hasattr(buy_reply, "get_items"):
+                    for item in list(getattr(buy_reply, "get_items", []) or []):
+                        got_id = _to_int(getattr(item, "id", 0), 0)
+                        if got_id > 0:
+                            seed_id = got_id
+                            break
             except Exception as e:
                 # 购买失败时仍尝试播种（可能背包已有种子），避免整轮自动化中断。
                 self._debug_log(
@@ -451,6 +501,11 @@ class AccountRuntime:
                     goodsId=goods_id,
                     targetCount=len(lands_to_plant),
                 )
+                if seed_stock is not None:
+                    fallback_count = min(seed_stock, len(lands_to_plant))
+                    if fallback_count <= 0:
+                        return 0
+                    lands_to_plant = lands_to_plant[:fallback_count]
         planted = await self.farm.plant(seed_id, lands_to_plant)
         if planted > 0:
             self._record("plant", planted)
@@ -461,6 +516,31 @@ class AccountRuntime:
             if mode in {"organic", "both"}:
                 self._record("fertilize", await self.farm.fertilize(planted_ids, 1012))
         return planted
+
+    async def _get_seed_stock(self, seed_id: int) -> int | None:
+        if seed_id <= 0:
+            return 0
+        warehouse = getattr(self, "warehouse", None)
+        if not warehouse or not hasattr(warehouse, "get_bag") or not hasattr(warehouse, "get_bag_items"):
+            return None
+        try:
+            bag = await warehouse.get_bag()
+            items = warehouse.get_bag_items(bag)
+            total = 0
+            for item in list(items or []):
+                if _to_int(getattr(item, "id", 0), 0) != seed_id:
+                    continue
+                total += max(0, _to_int(getattr(item, "count", 0), 0))
+            return total
+        except Exception as e:
+            self._debug_log(
+                "farm",
+                f"seed stock check failed: {e}",
+                module="farm",
+                event="seed_stock_check_failed",
+                seedId=seed_id,
+            )
+            return None
 
     async def _auto_sell(self) -> None:
         result = await self.warehouse.sell_all_fruits()
