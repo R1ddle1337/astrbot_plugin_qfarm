@@ -802,6 +802,15 @@ class QFarmCommandRouter:
             reason = str(data.get("plantSkipReason") or "").strip()
             if reason and planted <= 0:
                 lines.append(f"未种植原因: {reason}")
+            failures = data.get("plantFailures") if isinstance(data.get("plantFailures"), list) else []
+            if failures and planted <= 0:
+                first = failures[0] if isinstance(failures[0], dict) else {}
+                lid = self._safe_int(first.get("landId"), 0)
+                err = str(first.get("error") or "").strip()
+                if lid > 0 and err:
+                    lines.append(f"失败示例: 地块#{lid} {err}")
+                elif err:
+                    lines.append(f"失败示例: {err}")
         return "\n".join(lines)
 
     async def _start_qr_bind(self, event: Any, user_id: str) -> list[RouterReply]:

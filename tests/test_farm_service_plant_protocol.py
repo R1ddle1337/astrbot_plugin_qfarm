@@ -52,3 +52,27 @@ async def test_plant_prefers_items_payload():
     assert req2.items[0].seed_id == 20001
     assert list(req2.items[0].land_ids) == [2]
     assert len(req2.land_and_seed) == 0
+
+
+class _AlwaysFailSession:
+    async def call(self, service: str, method: str, body: bytes, timeout_sec: int):  # pragma: no cover
+        _ = (service, method, body, timeout_sec)
+        raise RuntimeError()
+
+
+@pytest.mark.asyncio
+async def test_plant_failure_error_text_never_empty():
+    session = _AlwaysFailSession()
+    service = FarmService(
+        session=session,  # type: ignore[arg-type]
+        config_data=_DummyConfigData(),  # type: ignore[arg-type]
+        analytics=_DummyAnalytics(),  # type: ignore[arg-type]
+        rpc_timeout_sec=10,
+    )
+
+    ok = await service.plant(20001, [1])
+
+    assert ok == 0
+    assert service.last_plant_error
+    assert "RuntimeError" in service.last_plant_error
+    assert service.last_plant_failures

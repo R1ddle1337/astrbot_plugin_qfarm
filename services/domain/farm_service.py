@@ -38,6 +38,13 @@ def _to_time_sec(raw: int) -> int:
     return n
 
 
+def _error_text(exc: Exception) -> str:
+    text = str(exc or "").strip()
+    if text:
+        return text
+    return exc.__class__.__name__
+
+
 @dataclass(slots=True)
 class LandAnalyzeResult:
     harvestable: list[int]
@@ -213,11 +220,13 @@ class FarmService:
                     )
                     ok += 1
                 except Exception as e_map:
-                    self.last_plant_error = str(e_map or e_items)
+                    err_items = _error_text(e_items)
+                    err_map = _error_text(e_map)
+                    self.last_plant_error = f"items={err_items}; map={err_map}"
                     self.last_plant_failures.append(
                         {
                             "landId": int(land_id),
-                            "error": str(e_map or e_items),
+                            "error": self.last_plant_error,
                         }
                     )
                     continue

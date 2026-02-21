@@ -174,7 +174,11 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.1.3
+- Current release: v2.1.4
+- 2026-02-21 v2.1.4
+- Improve: planting failures now include per-land error samples (`items=...; map=...`) to avoid empty diagnostics.
+- Improve: auto-plant adds seed-stock precheck before final Plant call and returns explicit guidance when stock is zero.
+- Test: add non-empty plant error text regression and failure-sample rendering regression tests.
 - 2026-02-21 v2.1.3
 - Fix: align planting RPC with Node semantics (`PlantRequest.items` first, map fallback for compatibility).
 - Fix: when all lands fail to plant, command now surfaces backend error text instead of generic message.

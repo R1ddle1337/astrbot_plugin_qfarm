@@ -500,6 +500,7 @@ class AccountRuntime:
             "plantTargetCount": plant_target_count,
             "plantedCount": planted_count,
             "plantSkipReason": plant_skip_reason,
+            "plantFailures": list(getattr(self.farm, "last_plant_failures", []) or [])[:10],
         }
 
     async def _auto_plant(self, dead_ids: list[int], empty_ids: list[int]) -> int:
@@ -621,10 +622,32 @@ class AccountRuntime:
                         self._last_plant_skip_reason = "购买种子失败且背包无可用种子"
                         return 0
                     lands_to_plant = lands_to_plant[:fallback_count]
+        post_stock = await self._get_seed_stock(seed_id)
+        if post_stock is not None:
+            if post_stock <= 0:
+                self._last_plant_skip_reason = (
+                    f"背包种子库存为0(seedId={seed_id})，请先检查 `qfarm 背包 查看` 或更换 `qfarm 设置 种子 <seedId>`"
+                )
+                return 0
+            if post_stock < len(lands_to_plant):
+                lands_to_plant = lands_to_plant[:post_stock]
         planted = await self.farm.plant(seed_id, lands_to_plant)
         if planted <= 0 and lands_to_plant:
             last_error = str(getattr(self.farm, "last_plant_error", "") or "").strip()
-            if last_error:
+            failures = getattr(self.farm, "last_plant_failures", [])
+            if isinstance(failures, list) and failures:
+                first = failures[0] if isinstance(failures[0], dict) else {}
+                land_id = _to_int(first.get("landId"), 0)
+                err = str(first.get("error") or "").strip()
+                if land_id > 0 and err:
+                    self._last_plant_skip_reason = f"种植失败: 地块#{land_id} {err}"
+                elif err:
+                    self._last_plant_skip_reason = f"种植失败: {err}"
+                elif last_error:
+                    self._last_plant_skip_reason = f"种植失败: {last_error}"
+                else:
+                    self._last_plant_skip_reason = "种植失败: 服务端返回空错误，请重试并查看 /qfarm 日志 50 module=farm"
+            elif last_error:
                 self._last_plant_skip_reason = f"种植失败: {last_error}"
             else:
                 self._last_plant_skip_reason = "种植请求已发送，但未成功种植任何地块"

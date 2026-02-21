@@ -35,6 +35,7 @@ class _FakeApi:
             "plantTargetCount": 7,
             "plantedCount": 0,
             "plantSkipReason": "种子库存不足且金币不足，无法购买种子",
+            "plantFailures": [{"landId": 1, "error": "items=GatewaySessionError; map=GatewaySessionError"}],
         }
 
 
@@ -64,3 +65,4 @@ async def test_cmd_farm_operate_plant_reports_skip_reason(tmp_path: Path):
     assert "农田操作完成: plant" in text
     assert "播种结果: 0/7" in text
     assert "未种植原因: 种子库存不足且金币不足，无法购买种子" in text
+    assert "失败示例: 地块#1 items=GatewaySessionError; map=GatewaySessionError" in text
