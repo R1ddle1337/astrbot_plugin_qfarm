@@ -371,7 +371,9 @@ class AccountRuntime:
             )
 
         if mode in {"all", "plant"}:
-            planted = await self._auto_plant(list(analyzed.dead) + harvest_ids, list(analyzed.empty))
+            dead_ids = list(analyzed.dead)
+            empty_ids = list(analyzed.empty) + list(harvest_ids)
+            planted = await self._auto_plant(dead_ids, empty_ids)
             if planted > 0:
                 actions.append(f"种植{planted}")
 
@@ -392,8 +394,28 @@ class AccountRuntime:
     async def _auto_plant(self, dead_ids: list[int], empty_ids: list[int]) -> int:
         lands_to_plant = list(empty_ids)
         if dead_ids:
-            await self.farm.remove_plant(dead_ids)
+            try:
+                await self.farm.remove_plant(dead_ids)
+            except Exception as e:
+                self._debug_log(
+                    "farm",
+                    f"remove_plant failed but continue planting: {e}",
+                    module="farm",
+                    event="remove_plant_failed",
+                    deadCount=len(dead_ids),
+                )
             lands_to_plant.extend(dead_ids)
+        if not lands_to_plant:
+            return 0
+        unique_lands: list[int] = []
+        seen: set[int] = set()
+        for land_id in lands_to_plant:
+            lid = _to_int(land_id, 0)
+            if lid <= 0 or lid in seen:
+                continue
+            seen.add(lid)
+            unique_lands.append(lid)
+        lands_to_plant = unique_lands
         if not lands_to_plant:
             return 0
         seed = await self.farm.choose_seed(
@@ -402,6 +424,13 @@ class AccountRuntime:
             preferred_seed_id=_to_int(self.settings.get("preferredSeedId"), 0),
         )
         if not seed:
+            self._debug_log(
+                "farm",
+                "skip auto plant: no available seed",
+                module="farm",
+                event="seed_unavailable",
+                targetCount=len(lands_to_plant),
+            )
             return 0
         seed_id = _to_int(seed.get("seedId"), 0)
         goods_id = _to_int(seed.get("goodsId"), 0)

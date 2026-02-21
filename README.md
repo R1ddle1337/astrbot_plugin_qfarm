@@ -154,7 +154,11 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.0.2
+- Current release: v2.0.3
+- 2026-02-21 v2.0.3
+- Fix: auto-plant now treats harvested lands as empty targets instead of dead targets.
+- Fix: when `remove_plant` fails on dead land cleanup, planting continues instead of aborting.
+- Add: regression test for remove-failure-continue-plant behavior.
 - 2026-02-21 v2.0.2
 - Fix: command handler now accepts AstrBot extra positional args (avoid TypeError).
 - Fix: websocket 400 invalid response status is classified as non-retryable start error.
