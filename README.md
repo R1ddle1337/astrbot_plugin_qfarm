@@ -154,7 +154,10 @@ pip install -r requirements.txt
 
 ## Version
 
-- Current release: v2.0.4
+- Current release: v2.0.5
+- 2026-02-21 v2.0.5
+- Fix: harden command event resolution to handle AstrBot callback arg-order variance.
+- Fix: add guarded result builders to prevent `plain_result/image_result` attribute crashes.
 - 2026-02-21 v2.0.4
 - Fix: command entry now resolves AstrBot event object from mixed callback argument orders.
 - Fix: avoid `QFarmPlugin has no attribute plain_result` when framework passes extra positional args.

@@ -22,7 +22,7 @@ from .services.state_store import QFarmStateStore
     "astrbot_plugin_qfarm",
     "riddle",
     "AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 实现）",
-    "2.0.4",
+    "2.0.5",
     "https://github.com/R1ddle1337/astrbot_plugin_qfarm",
 )
 class QFarmPlugin(Star):
@@ -124,15 +124,17 @@ class QFarmPlugin(Star):
         logger.info("[qfarm] 插件已卸载")
 
     @filter.command("qfarm", alias={"农场"})
-    async def qfarm_entry(self, event: Any = None, *args: Any, **kwargs: Any):
-        current_event = self._resolve_command_event(event, args, kwargs)
+    async def qfarm_entry(self, *args: Any, **kwargs: Any):
+        current_event = self._resolve_command_event(args, kwargs)
         if current_event is None:
             logger.error(
-                f"[qfarm] 无法解析命令事件对象，event={type(event)}, args={[type(x) for x in args]}, kwargs={list(kwargs.keys())}"
+                f"[qfarm] 无法解析命令事件对象，args={[type(x) for x in args]}, kwargs={list(kwargs.keys())}"
             )
             return
         if self.router is None:
-            yield current_event.plain_result("qfarm 插件尚未初始化。")
+            plain = self._build_plain_result(current_event, "qfarm 插件尚未初始化。")
+            if plain is not None:
+                yield plain
             return
         replies = await self.router.handle(current_event)
         for reply in replies:
@@ -154,11 +156,17 @@ class QFarmPlugin(Star):
                 if images:
                     rendered = True
                     for image_path in images:
-                        yield current_event.image_result(image_path)
+                        image = self._build_image_result(current_event, image_path)
+                        if image is not None:
+                            yield image
             if reply.text and not rendered:
-                yield current_event.plain_result(reply.text)
+                plain = self._build_plain_result(current_event, reply.text)
+                if plain is not None:
+                    yield plain
             if reply.image_url:
-                yield current_event.image_result(reply.image_url)
+                image = self._build_image_result(current_event, reply.image_url)
+                if image is not None:
+                    yield image
 
     async def _send_active_message(self, umo: Any, text: str) -> None:
         chain = MessageChain().message(text)
@@ -273,11 +281,10 @@ class QFarmPlugin(Star):
 
     def _resolve_command_event(
         self,
-        primary_event: Any,
         args: tuple[Any, ...],
         kwargs: dict[str, Any],
     ) -> AstrMessageEvent | None:
-        candidates: list[Any] = [primary_event]
+        candidates: list[Any] = []
         for key in ("event", "message_event", "msg_event"):
             if key in kwargs:
                 candidates.append(kwargs.get(key))
@@ -285,6 +292,45 @@ class QFarmPlugin(Star):
         for item in candidates:
             if item is None:
                 continue
-            if hasattr(item, "plain_result") and hasattr(item, "image_result"):
+            if item is self:
+                continue
+            plain_fn = self._get_callable(item, "plain_result")
+            if plain_fn is not None:
                 return item
+            if isinstance(item, (list, tuple)):
+                for nested in item:
+                    if nested is None or nested is self:
+                        continue
+                    if self._get_callable(nested, "plain_result") is not None:
+                        return nested
         return None
+
+    @staticmethod
+    def _get_callable(target: Any, name: str) -> Any | None:
+        try:
+            fn = getattr(target, name, None)
+        except Exception:
+            return None
+        return fn if callable(fn) else None
+
+    def _build_plain_result(self, event: Any, text: str) -> Any | None:
+        fn = self._get_callable(event, "plain_result")
+        if fn is None:
+            logger.error(f"[qfarm] 事件对象不支持 plain_result: {type(event)}")
+            return None
+        try:
+            return fn(text)
+        except Exception as e:
+            logger.error(f"[qfarm] 调用 plain_result 失败: {e}")
+            return None
+
+    def _build_image_result(self, event: Any, image: str) -> Any | None:
+        fn = self._get_callable(event, "image_result")
+        if fn is None:
+            logger.error(f"[qfarm] 事件对象不支持 image_result: {type(event)}")
+            return None
+        try:
+            return fn(image)
+        except Exception as e:
+            logger.error(f"[qfarm] 调用 image_result 失败: {e}")
+            return None
