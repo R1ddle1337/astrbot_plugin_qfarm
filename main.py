@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+import re
 from typing import Any
 
 from astrbot.api import AstrBotConfig, logger
@@ -40,6 +41,7 @@ class QFarmPlugin(Star):
         self._super_admin_ids = self._load_super_admin_ids()
 
     async def initialize(self) -> None:
+        self._super_admin_ids = self._load_super_admin_ids()
         gateway_ws_url = self._cfg_str("gateway_ws_url", "wss://gate-obt.nqf.qq.com/prod/ws")
         client_version = self._cfg_str("client_version", "1.6.0.5_20251224")
         platform = self._cfg_str("platform", "qq")
@@ -171,18 +173,16 @@ class QFarmPlugin(Star):
 
     def _load_super_admin_ids(self) -> set[str]:
         values: list[str] = []
+        for key in ("super_admin_ids", "admins_id", "admins", "admin_ids", "superusers"):
+            values.extend(self._normalize_id_values(self._cfg_raw(key, [])))
         try:
             cfg = self.context.get_config() if hasattr(self.context, "get_config") else {}
         except Exception:
             cfg = {}
         if isinstance(cfg, dict):
             for key in ("admins_id", "admins", "admin_ids", "superusers"):
-                raw = cfg.get(key, [])
-                if isinstance(raw, list):
-                    values.extend([str(v).strip() for v in raw if str(v).strip()])
-                elif raw:
-                    values.append(str(raw).strip())
-        return set(values)
+                values.extend(self._normalize_id_values(cfg.get(key, [])))
+        return {item for item in values if item}
 
     def _resolve_plugin_data_dir(self) -> Path:
         try:
@@ -242,3 +242,25 @@ class QFarmPlugin(Star):
             if text:
                 result.append(text)
         return result
+
+    def _cfg_raw(self, key: str, default: Any) -> Any:
+        try:
+            return self.config.get(key, default)  # type: ignore[attr-defined]
+        except Exception:
+            return default
+
+    def _normalize_id_values(self, raw: Any) -> list[str]:
+        if isinstance(raw, list):
+            result: list[str] = []
+            for item in raw:
+                text = str(item).strip()
+                if text:
+                    result.append(text)
+            return result
+        if raw is None:
+            return []
+        text = str(raw).strip()
+        if not text:
+            return []
+        parts = re.split(r"[\s,;，；|]+", text)
+        return [item for item in (part.strip() for part in parts) if item]

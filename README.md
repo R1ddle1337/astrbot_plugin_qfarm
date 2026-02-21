@@ -80,6 +80,7 @@ pip install -r requirements.txt
 - `start_retry_max_delay_sec`
 - `auto_start_concurrency`
 - `request_timeout_sec`
+- `super_admin_ids`
 - `allowed_user_ids`
 - `allowed_group_ids`
 - `rate_limit_read_sec`
@@ -90,6 +91,27 @@ pip install -r requirements.txt
 - `render_service_url`
 - `render_timeout_sec`
 - `render_healthcheck_sec`
+
+## 超级管理员配置说明
+
+超级管理员 ID 支持两种来源，最终会合并：
+
+- AstrBot 全局配置：`admins_id` / `admins` / `admin_ids` / `superusers`
+- qfarm 插件配置：`super_admin_ids`（推荐）
+
+示例（插件配置）：
+
+```json
+{
+  "super_admin_ids": ["3615653397"]
+}
+```
+
+说明：
+
+- 超级管理员可绕过白名单校验
+- 超级管理员可执行：`服务`、`白名单`、`调试` 命令
+- 修改超管配置后需要重载插件或重启 AstrBot
 
 ## 数据文件
 

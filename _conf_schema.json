@@ -54,6 +54,11 @@
     "type": "int",
     "default": 15
   },
+  "super_admin_ids": {
+    "description": "插件内超级管理员 ID 列表（可覆盖/补充全局管理员）",
+    "type": "list",
+    "default": []
+  },
   "allowed_user_ids": {
     "description": "允许使用命令的用户白名单（静态）",
     "type": "list",
