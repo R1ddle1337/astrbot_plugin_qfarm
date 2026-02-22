@@ -262,9 +262,17 @@ pip install -r requirements-dev.txt
 - 重新绑定：`qfarm 账号 绑定 code <code>` 或 `qfarm 账号 绑定扫码`
 
 
+## QR Security Note
+
+- 扫码登录二维码已改为插件本地生成 PNG（缓存目录：插件 data 下 `qr_cache/`）。
+- 纯 Python 主链已移除 `api.qrserver.com` 依赖。
+
 ## Version
 
-- Current release: v2.2.5
+- Current release: v2.2.6
+- 2026-02-22 v2.2.6
+- Security: 扫码二维码改为本地生成 PNG，不再依赖第三方二维码服务。
+- Test: 新增本地二维码生成与缓存清理测试。
 - 2026-02-21 v2.2.5
 - Security: 增加运行态与隐私文件忽略规则（`share.txt`、`*_v2.json`、cookie/session 等）。
 - Security: `qqfarm文档/share.txt` 已改为忽略，避免未来误上传。

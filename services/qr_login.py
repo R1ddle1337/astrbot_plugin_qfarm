@@ -32,21 +32,27 @@ class QFarmQRLogin:
         async with aiohttp.ClientSession(timeout=self._timeout, headers=self._headers()) as session:
             async with session.get(url) as resp:
                 data = await self._read_json(resp)
+
         if _to_int(data.get("code"), -1) != 0:
             raise QRLoginError("获取登录码失败")
+
         payload = data.get("data", {}) if isinstance(data, dict) else {}
         code = str(payload.get("code") or "").strip()
         if not code:
             raise QRLoginError("登录码为空")
+
         login_url = f"https://h5.qzone.qq.com/qqq/code/{code}?_proxy=1&from=ide"
-        qrcode_url = f"https://api.qrserver.com/v1/create-qr-code/?size=300x300&data={aiohttp.helpers.quote(login_url, safe='')}"
-        return {"code": code, "url": login_url, "qrcode": qrcode_url}
+        return {"code": code, "url": login_url}
 
     async def query_status(self, code: str) -> dict[str, Any]:
         code_text = str(code or "").strip()
         if not code_text:
             raise QRLoginError("code 不能为空")
-        url = f"https://q.qq.com/ide/devtoolAuth/syncScanSateGetTicket?code={aiohttp.helpers.quote(code_text, safe='')}"
+
+        url = (
+            "https://q.qq.com/ide/devtoolAuth/syncScanSateGetTicket"
+            f"?code={aiohttp.helpers.quote(code_text, safe='')}"
+        )
         async with aiohttp.ClientSession(timeout=self._timeout, headers=self._headers()) as session:
             async with session.get(url) as resp:
                 if resp.status != 200:
@@ -71,6 +77,7 @@ class QFarmQRLogin:
         ticket_text = str(ticket or "").strip()
         if not ticket_text:
             return ""
+
         url = "https://q.qq.com/ide/login"
         payload = {"appid": self.config.appid, "ticket": ticket_text}
         async with aiohttp.ClientSession(timeout=self._timeout, headers=self._headers()) as session:
@@ -91,6 +98,7 @@ class QFarmQRLogin:
             if status.get("status") == "Wait":
                 return {"status": "Wait"}
             return {"status": "Error", "error": str(status.get("msg") or "未知错误")}
+
         ticket = str(status.get("ticket") or "")
         uin = str(status.get("uin") or "")
         auth_code = await self.get_auth_code(ticket)

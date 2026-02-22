@@ -9,6 +9,7 @@ from typing import Any
 from ..domain.analytics_service import AnalyticsService
 from ..domain.config_data import GameConfigData
 from ..protocol import GatewaySessionConfig
+from ..qr_code_renderer import QRCodeRenderError, cleanup_qr_cache, save_qr_png
 from ..qr_login import QFarmQRLogin
 from .account_runtime import AccountRuntime
 
@@ -98,6 +99,9 @@ class QFarmRuntimeManager:
         self.config_data = GameConfigData(self.plugin_root)
         self.analytics = AnalyticsService(self.config_data)
         self.qr_login = QFarmQRLogin()
+        self.qr_cache_dir = self.data_dir / "qr_cache"
+        self.qr_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.qr_cache_ttl_sec = 3600
 
         self.accounts_path = self.data_dir / "accounts_v2.json"
         self.settings_path = self.data_dir / "settings_v2.json"
@@ -542,7 +546,16 @@ class QFarmRuntimeManager:
         return await self._require_runtime(account_id).debug_sell()
 
     async def qr_create(self) -> dict[str, Any]:
-        return await self.qr_login.create()
+        payload = await self.qr_login.create()
+        login_url = str(payload.get("url") or "").strip()
+        if not login_url:
+            raise RuntimeError("扫码登录链接为空")
+        cleanup_qr_cache(self.qr_cache_dir, ttl_sec=self.qr_cache_ttl_sec)
+        try:
+            payload["qrcode"] = save_qr_png(login_url, self.qr_cache_dir)
+        except QRCodeRenderError as e:
+            raise RuntimeError(f"本地二维码生成失败: {e}") from e
+        return payload
 
     async def qr_check(self, code: str) -> dict[str, Any]:
         return await self.qr_login.check(str(code or ""))
