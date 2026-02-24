@@ -159,6 +159,26 @@
     "type": "string",
     "default": ""
   },
+  "push.allow_private_endpoint": {
+    "description": "是否允许私网/回环 webhook 地址（默认禁用，防 SSRF）",
+    "type": "bool",
+    "default": false
+  },
+  "push.body_token_enabled": {
+    "description": "是否在 webhook body 中携带 token（默认仅使用 Authorization 头）",
+    "type": "bool",
+    "default": false
+  },
+  "push.max_concurrency": {
+    "description": "推送请求全局最大并发数",
+    "type": "int",
+    "default": 8
+  },
+  "push.max_per_minute": {
+    "description": "单账号每分钟推送请求上限（含重试）",
+    "type": "int",
+    "default": 60
+  },
   "enable_image_render": {
     "description": "是否启用文本结果图片渲染",
     "type": "bool",

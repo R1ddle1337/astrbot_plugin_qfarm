@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from google.protobuf.message import DecodeError
+
 from .proto import game_pb2
+
+MAX_GATE_MESSAGE_BYTES = 512 * 1024
 
 
 @dataclass(slots=True)
@@ -44,8 +48,12 @@ def encode_request(
 
 
 def decode_gate_message(data: bytes) -> GateMessage:
+    raw_data = _validate_message_bytes(data, "gate")
     raw = game_pb2.Message()
-    raw.ParseFromString(data)
+    try:
+        raw.ParseFromString(raw_data)
+    except DecodeError as e:
+        raise ValueError(f"invalid gate message: {e}") from e
     if raw.meta is None:
         raise ValueError("gate message missing meta")
     meta = GateMeta(
@@ -61,6 +69,21 @@ def decode_gate_message(data: bytes) -> GateMessage:
 
 
 def decode_event_message(data: bytes) -> tuple[str, bytes]:
+    raw_data = _validate_message_bytes(data, "event")
     event = game_pb2.EventMessage()
-    event.ParseFromString(data)
-    return event.message_type, bytes(event.body or b"")
+    try:
+        event.ParseFromString(raw_data)
+    except DecodeError as e:
+        raise ValueError(f"invalid event message: {e}") from e
+    message_type = str(event.message_type or "").strip()
+    if not message_type:
+        raise ValueError("event message missing message_type")
+    return message_type, bytes(event.body or b"")
+
+
+def _validate_message_bytes(data: bytes, label: str) -> bytes:
+    raw = bytes(data or b"")
+    size = len(raw)
+    if size > MAX_GATE_MESSAGE_BYTES:
+        raise ValueError(f"{label} message too large: {size} > {MAX_GATE_MESSAGE_BYTES}")
+    return raw

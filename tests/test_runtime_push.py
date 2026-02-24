@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -17,6 +18,42 @@ def _build_manager(tmp_path: Path, *, default_push: dict[str, object] | None = N
         default_push=default_push,  # type: ignore[arg-type]
         logger=None,
     )
+
+
+class _FakeResponse:
+    def __init__(self, status: int, text: str) -> None:
+        self.status = int(status)
+        self._text = str(text)
+
+    async def __aenter__(self) -> "_FakeResponse":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        _ = (exc_type, exc, tb)
+        return False
+
+    async def text(self) -> str:
+        return self._text
+
+
+class _FakeSession:
+    response_status = 200
+    response_text = "ok"
+    last_post: dict[str, Any] | None = None
+
+    def __init__(self, timeout: object | None = None) -> None:
+        self.timeout = timeout
+
+    async def __aenter__(self) -> "_FakeSession":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        _ = (exc_type, exc, tb)
+        return False
+
+    def post(self, url: str, *, json: dict[str, Any], headers: dict[str, str]) -> _FakeResponse:
+        _FakeSession.last_post = {"url": url, "json": dict(json), "headers": dict(headers)}
+        return _FakeResponse(status=self.response_status, text=self.response_text)
 
 
 @pytest.mark.asyncio
@@ -36,6 +73,10 @@ async def test_push_settings_merge_and_save(tmp_path: Path):
     assert current["push"]["channel"] == "webhook"
     assert current["push"]["endpoint"] == "https://default.local/hook"
     assert current["push"]["token"] == "token-default"
+    assert current["push"]["allowPrivateEndpoint"] is False
+    assert current["push"]["bodyTokenEnabled"] is False
+    assert current["push"]["maxConcurrency"] == 8
+    assert current["push"]["maxPerMinute"] == 60
 
     saved = await manager.save_push_settings(
         "acc-1",
@@ -157,3 +198,112 @@ async def test_send_push_test_returns_error_when_endpoint_missing(tmp_path: Path
     payload = await manager.send_push_test("a1")
     assert payload["ok"] is False
     assert "endpoint" in str(payload["message"]).lower()
+
+
+@pytest.mark.asyncio
+async def test_send_push_once_rejects_private_endpoint_by_default(tmp_path: Path):
+    manager = _build_manager(tmp_path)
+    with pytest.raises(PushDeliverError) as exc:
+        await manager._send_push_once(
+            account_id="a1",
+            push_cfg={
+                "enabled": True,
+                "channel": "webhook",
+                "endpoint": "https://127.0.0.1/hook",
+                "token": "abc",
+            },
+            title="t",
+            content="c",
+            context={},
+        )
+    assert exc.value.error_code == "endpoint_private"
+
+
+@pytest.mark.asyncio
+async def test_send_push_once_header_token_only_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    manager = _build_manager(tmp_path)
+    _FakeSession.response_status = 200
+    _FakeSession.response_text = "ok"
+    _FakeSession.last_post = None
+    monkeypatch.setattr(runtime_manager_module.aiohttp, "ClientSession", _FakeSession)
+
+    payload = await manager._send_push_once(
+        account_id="a1",
+        push_cfg={
+            "enabled": True,
+            "channel": "webhook",
+            "endpoint": "https://example.com/hook",
+            "token": "abc123",
+        },
+        title="t",
+        content="c",
+        context={},
+    )
+    assert payload["httpStatus"] == 200
+    assert _FakeSession.last_post is not None
+    assert _FakeSession.last_post["headers"]["Authorization"] == "Bearer abc123"
+    assert "token" not in _FakeSession.last_post["json"]
+
+
+@pytest.mark.asyncio
+async def test_send_push_once_body_token_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    manager = _build_manager(tmp_path)
+    _FakeSession.response_status = 200
+    _FakeSession.response_text = "ok"
+    _FakeSession.last_post = None
+    monkeypatch.setattr(runtime_manager_module.aiohttp, "ClientSession", _FakeSession)
+
+    await manager._send_push_once(
+        account_id="a1",
+        push_cfg={
+            "enabled": True,
+            "channel": "webhook",
+            "endpoint": "https://example.com/hook",
+            "token": "abc123",
+            "bodyTokenEnabled": True,
+        },
+        title="t",
+        content="c",
+        context={},
+    )
+    assert _FakeSession.last_post is not None
+    assert _FakeSession.last_post["json"]["token"] == "abc123"
+
+
+@pytest.mark.asyncio
+async def test_send_push_with_retry_rate_limit_exceeded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    manager = _build_manager(tmp_path)
+
+    async def _fake_send_push_once(**_: object) -> dict[str, object]:
+        return {"httpStatus": 200, "message": "ok"}
+
+    async def _fake_sleep(_: float) -> None:
+        return
+
+    monkeypatch.setattr(manager, "_send_push_once", _fake_send_push_once)  # type: ignore[arg-type]
+    monkeypatch.setattr(runtime_manager_module.asyncio, "sleep", _fake_sleep)
+
+    push_cfg = {
+        "enabled": True,
+        "channel": "webhook",
+        "endpoint": "https://example.com/hook",
+        "token": "t",
+        "retryMax": 0,
+        "maxPerMinute": 1,
+    }
+    await manager._send_push_with_retry(
+        account_id="a1",
+        push_cfg=push_cfg,
+        title="a",
+        content="b",
+        context={},
+    )
+    with pytest.raises(RuntimeError) as exc:
+        await manager._send_push_with_retry(
+            account_id="a1",
+            push_cfg=push_cfg,
+            title="a",
+            content="b",
+            context={},
+        )
+    assert "rate limit" in str(exc.value).lower()

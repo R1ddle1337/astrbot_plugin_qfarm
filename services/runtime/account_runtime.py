@@ -799,6 +799,7 @@ class AccountRuntime:
 
     async def _scheduler_loop(self) -> None:
         backoff = 1
+        farm_error_backoff = 5.0
         while self.running:
             try:
                 if not self.login_ready or not self.connected:
@@ -810,12 +811,25 @@ class AccountRuntime:
                 now = time.time()
                 auto = self._automation()
                 if now >= self._next_farm_at:
-                    if auto.get("farm", True):
-                        await self.do_farm_operation("all")
-                    if auto.get("task", True):
-                        await self.check_and_claim_tasks()
-                    await self.run_daily_routines(force=False)
-                    self._next_farm_at = now + self._rand_interval("farm")
+                    try:
+                        if auto.get("farm", True):
+                            await self.do_farm_operation("all")
+                        if auto.get("task", True):
+                            await self.check_and_claim_tasks()
+                        await self.run_daily_routines(force=False)
+                        self._next_farm_at = now + self._rand_interval("farm")
+                        farm_error_backoff = 5.0
+                    except Exception as e:
+                        self._next_farm_at = now + farm_error_backoff
+                        self._debug_log(
+                            "scheduler",
+                            f"farm cycle failed, backoff={farm_error_backoff:.1f}s: {e}",
+                            module="system",
+                            event="farm_cycle_error",
+                            result="error",
+                            backoffSec=farm_error_backoff,
+                        )
+                        farm_error_backoff = min(300.0, farm_error_backoff * 2)
                 if now >= self._next_friend_at:
                     if auto.get("friend", True) and not self._in_friend_quiet_hours():
                         await self._auto_friend_cycle()

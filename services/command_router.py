@@ -1147,7 +1147,7 @@ class QFarmCommandRouter:
             "29) qfarm 设置 静默 <on|off> <HH:MM> <HH:MM>\n"
             "30) qfarm 主题 <dark|light>\n"
             "31) qfarm 日志 [limit] [module=...] [event=...] [keyword=...] [isWarn=0|1] [详细]\n"
-            "32) qfarm 账号日志 [limit] [详细]\n"
+            "32) qfarm 账号日志 [limit] [详细] (超管)\n"
             "33) qfarm 邮件 查看 [1|2|all] | 领取 [详细]\n"
             "34) qfarm 商城 列表 | 领取 [详细] | 购买 <goodsId> [count]\n"
             "35) qfarm 月卡 查看 | 领取 [详细]\n"
@@ -1255,7 +1255,7 @@ class QFarmCommandRouter:
                 "- qfarm 日志\n"
                 "- qfarm 日志 详细\n"
                 "- qfarm 日志 30 module=task event=daily_summary keyword=error isWarn=1\n"
-                "- qfarm 账号日志 [limit] [详细]\n"
+                "- qfarm 账号日志 [limit] [详细] (超管)\n"
                 "- 默认策略: `日志` 为告警优先（isWarn=1, limit=20）"
             )
         if module_name == "推送":
@@ -1523,7 +1523,17 @@ class QFarmCommandRouter:
         return True, ""
 
     def _is_super_admin_cmd(self, top: str) -> bool:
-        return top in {"服务", "service", "白名单", "whitelist", "调试", "debug"}
+        return top in {
+            "服务",
+            "service",
+            "白名单",
+            "whitelist",
+            "调试",
+            "debug",
+            "账号日志",
+            "accountlogs",
+            "account-logs",
+        }
 
     def _is_write_command(self, tokens: list[str]) -> bool:
         cmd = self._token(tokens[0]) if tokens else ""

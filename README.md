@@ -97,7 +97,7 @@ pip install -r requirements-dev.txt
 - `qfarm 全自动 开|关` 等价 `qfarm 自动化 全开|全关`
 - `qfarm 种满` 等价 `qfarm 农田 操作 plant`
 
-推送命令（v2.4.2）：
+推送命令（v2.4.3）：
 - `qfarm 推送 查看`
 - `qfarm 推送 设置 开关 <on|off>`
 - `qfarm 推送 设置 通道 <webhook>`
@@ -105,6 +105,12 @@ pip install -r requirements-dev.txt
 - `qfarm 推送 设置 令牌 <token>`
 - `qfarm 推送 测试`
 - `qfarm 推送 清空`
+
+推送安全默认（v2.4.3）：
+- webhook 仅允许 `https` 地址。
+- 默认拒绝私网/回环地址（可通过 `push.allow_private_endpoint=true` 显式放行）。
+- 默认仅使用 `Authorization: Bearer` 传 token，不再把 token 写入 body（可通过 `push.body_token_enabled=true` 临时兼容）。
+- 自动推送受并发与分钟级频率闸门限制，避免异常风暴放大请求。
 
 输出精简策略（v2.4.2）：
 - 默认输出为短结果，减少群聊刷屏。
@@ -199,6 +205,10 @@ pip install -r requirements-dev.txt
 - `push.channel`
 - `push.endpoint`
 - `push.token`
+- `push.allow_private_endpoint`
+- `push.body_token_enabled`
+- `push.max_concurrency`
+- `push.max_per_minute`
 - `enable_image_render`
 - `render_service_url`
 - `render_timeout_sec`
@@ -222,7 +232,7 @@ pip install -r requirements-dev.txt
 说明：
 
 - 超级管理员可绕过白名单校验
-- 超级管理员可执行：`服务`、`白名单`、`调试` 命令
+- 超级管理员可执行：`服务`、`白名单`、`调试`、`账号日志` 命令
 - 修改超管配置后需要重载插件或重启 AstrBot
 
 ## 数据文件
@@ -320,7 +330,14 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.4.2
+- Current release: v2.4.3
+- 2026-02-24 v2.4.3
+- Reason: close high-risk security gaps found in qfarm audit, especially account log access control and push delivery boundary hardening.
+- Change: make `账号日志` super-admin only; harden push endpoint checks (`https` only and private host deny-by-default); default to header-only token with optional body fallback switch; add push concurrency/rate gates; add protobuf payload size guard; add runtime status write lock, scheduler backoff, and state store atomic write.
+- Impact: default behavior is safer with stricter push and log access boundaries, while command names and core farm automation flows remain unchanged.
+- Risk: deployments relying on private webhook targets or body token delivery must explicitly enable `push.allow_private_endpoint` and/or `push.body_token_enabled`; otherwise push test may fail by design.
+- Verification: `PYTHONPATH=d:\botproject python -m pytest tests -q` passed.
+- Verification: `python scripts/check_release_ready.py` passed.
 - 2026-02-24 v2.4.2
 - Reason: reduce verbose command output in group chats while preserving full troubleshooting details on demand.
 - Change: add unified `详细/detail/verbose/v` display mode; simplify default outputs for `帮助/状态/日志/日常领取`; switch default logs to warn-first (`isWarn=1`, limit=20) with verbose fallback (`limit=50`).

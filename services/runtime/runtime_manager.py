@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
 import json
+import re
 import time
+from collections import deque
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import aiohttp
 
@@ -64,6 +68,10 @@ DEFAULT_ACCOUNT_CONFIG = {
         "token": "",
         "autoEvents": "core",
         "retryMax": 2,
+        "allowPrivateEndpoint": False,
+        "bodyTokenEnabled": False,
+        "maxConcurrency": 8,
+        "maxPerMinute": 60,
     },
 }
 
@@ -86,6 +94,8 @@ class PushDeliverError(RuntimeError):
 
 
 class QFarmRuntimeManager:
+    _PUSH_ERROR_SNIPPET_MAX = 256
+
     def __init__(
         self,
         *,
@@ -163,6 +173,18 @@ class QFarmRuntimeManager:
                 continue
             if key == "retryMax":
                 base_push["retryMax"] = max(0, min(5, _to_int(value, 2)))
+                continue
+            if key in {"allowPrivateEndpoint", "allow_private_endpoint"}:
+                base_push["allowPrivateEndpoint"] = bool(value)
+                continue
+            if key in {"bodyTokenEnabled", "body_token_enabled"}:
+                base_push["bodyTokenEnabled"] = bool(value)
+                continue
+            if key in {"maxConcurrency", "max_concurrency"}:
+                base_push["maxConcurrency"] = max(1, min(32, _to_int(value, 8)))
+                continue
+            if key in {"maxPerMinute", "max_per_minute"}:
+                base_push["maxPerMinute"] = max(1, min(600, _to_int(value, 60)))
         self.config_data = GameConfigData(self.plugin_root)
         self.analytics = AnalyticsService(self.config_data)
         self.qr_login = QFarmQRLogin()
@@ -196,7 +218,13 @@ class QFarmRuntimeManager:
         self._runtime_logs_last_flush_at = time.monotonic()
         self._load_persisted_runtime_logs()
         self._state_lock = asyncio.Lock()
+        self._runtime_status_lock = asyncio.Lock()
         self._start_locks: dict[str, asyncio.Lock] = {}
+        self._push_semaphore = asyncio.Semaphore(max(1, _to_int(base_push.get("maxConcurrency"), 8)))
+        self._push_rate_lock = asyncio.Lock()
+        self._push_rate_windows: dict[str, deque[float]] = {}
+        self._auto_push_pending = 0
+        self._auto_push_pending_limit = max(20, max(1, _to_int(base_push.get("maxConcurrency"), 8)) * 20)
 
     async def start(self) -> None:
         if self._service_running:
@@ -373,7 +401,7 @@ class QFarmRuntimeManager:
                 data["nextId"] = 1
             self._accounts = data
             self._settings.get("accountConfigs", {}).pop(account_id_text, None)
-            self._clear_runtime_status(account_id_text)
+            await self._clear_runtime_status(account_id_text)
             self._save_json_atomic(self.accounts_path, self._accounts)
             self._save_json_atomic(self.settings_path, self._settings)
             self._add_account_log("delete", f"删除账号: {target_name or account_id_text}", account_id_text, target_name)
@@ -386,7 +414,7 @@ class QFarmRuntimeManager:
         lock = self._start_locks.setdefault(account_id_text, asyncio.Lock())
         async with lock:
             if account_id_text in self._runtimes:
-                self._set_runtime_status(account_id_text, runtimeState="running")
+                await self._set_runtime_status(account_id_text, runtimeState="running")
                 return
 
             account = self._find_account(account_id_text)
@@ -397,7 +425,7 @@ class QFarmRuntimeManager:
             last_error = ""
             for attempt in range(1, attempts + 1):
                 now_ms = int(time.time() * 1000)
-                self._set_runtime_status(
+                await self._set_runtime_status(
                     account_id_text,
                     runtimeState="starting" if attempt == 1 else "retrying",
                     lastStartAt=now_ms,
@@ -421,7 +449,7 @@ class QFarmRuntimeManager:
                 self._runtimes[account_id_text] = runtime
                 try:
                     await runtime.start()
-                    self._set_runtime_status(
+                    await self._set_runtime_status(
                         account_id_text,
                         runtimeState="running",
                         lastStartSuccessAt=int(time.time() * 1000),
@@ -440,7 +468,7 @@ class QFarmRuntimeManager:
                         attempt < attempts
                         and self._is_retryable_start_error(last_error)
                     )
-                    self._set_runtime_status(
+                    await self._set_runtime_status(
                         account_id_text,
                         runtimeState="retrying" if can_retry else "failed",
                         lastStartError=last_error,
@@ -483,13 +511,13 @@ class QFarmRuntimeManager:
         account_id_text = str(account_id or "").strip()
         runtime = self._runtimes.get(account_id_text)
         if not runtime:
-            self._set_runtime_status(account_id_text, runtimeState="stopped")
+            await self._set_runtime_status(account_id_text, runtimeState="stopped")
             return
         try:
             await runtime.stop()
         finally:
             self._runtimes.pop(account_id_text, None)
-            self._set_runtime_status(account_id_text, runtimeState="stopped")
+            await self._set_runtime_status(account_id_text, runtimeState="stopped")
 
     async def get_status(self, account_id: str | int) -> dict[str, Any]:
         account_id_text = str(account_id or "").strip()
@@ -819,6 +847,14 @@ class QFarmRuntimeManager:
                     merged_push["autoEvents"] = "core"
                 elif key == "retryMax":
                     merged_push["retryMax"] = max(0, min(5, _to_int(value, 2)))
+                elif key in {"allowPrivateEndpoint", "allow_private_endpoint"}:
+                    merged_push["allowPrivateEndpoint"] = bool(value)
+                elif key in {"bodyTokenEnabled", "body_token_enabled"}:
+                    merged_push["bodyTokenEnabled"] = bool(value)
+                elif key in {"maxConcurrency", "max_concurrency"}:
+                    merged_push["maxConcurrency"] = max(1, min(32, _to_int(value, 8)))
+                elif key in {"maxPerMinute", "max_per_minute"}:
+                    merged_push["maxPerMinute"] = max(1, min(600, _to_int(value, 60)))
             result["push"] = self._normalize_push_settings(merged_push)
         return result
 
@@ -860,6 +896,44 @@ class QFarmRuntimeManager:
         base["token"] = str(data.get("token", base.get("token", "")) or "").strip()
         base["autoEvents"] = "core"
         base["retryMax"] = max(0, min(5, _to_int(data.get("retryMax", base.get("retryMax", 2)), 2)))
+        base["allowPrivateEndpoint"] = bool(
+            data.get(
+                "allowPrivateEndpoint",
+                data.get("allow_private_endpoint", base.get("allowPrivateEndpoint", False)),
+            )
+        )
+        base["bodyTokenEnabled"] = bool(
+            data.get(
+                "bodyTokenEnabled",
+                data.get("body_token_enabled", base.get("bodyTokenEnabled", False)),
+            )
+        )
+        base["maxConcurrency"] = max(
+            1,
+            min(
+                32,
+                _to_int(
+                    data.get(
+                        "maxConcurrency",
+                        data.get("max_concurrency", base.get("maxConcurrency", 8)),
+                    ),
+                    8,
+                ),
+            ),
+        )
+        base["maxPerMinute"] = max(
+            1,
+            min(
+                600,
+                _to_int(
+                    data.get(
+                        "maxPerMinute",
+                        data.get("max_per_minute", base.get("maxPerMinute", 60)),
+                    ),
+                    60,
+                ),
+            ),
+        )
         return base
 
     @staticmethod
@@ -904,10 +978,31 @@ class QFarmRuntimeManager:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        try:
-            loop.create_task(self._deliver_auto_push(entry))
-        except Exception:
+        if self._auto_push_pending >= self._auto_push_pending_limit:
+            self._on_runtime_log(
+                self._extract_entry_account_id(entry),
+                "push",
+                "auto push dropped: pending queue overflow",
+                True,
+                {
+                    "module": "push",
+                    "event": "queue_drop",
+                    "result": "error",
+                    "pending": self._auto_push_pending,
+                    "limit": self._auto_push_pending_limit,
+                },
+            )
             return
+        try:
+            self._auto_push_pending += 1
+            task = loop.create_task(self._deliver_auto_push(entry))
+            task.add_done_callback(self._on_auto_push_task_done)
+        except Exception:
+            self._auto_push_pending = max(0, self._auto_push_pending - 1)
+            return
+
+    def _on_auto_push_task_done(self, _: asyncio.Task[Any]) -> None:
+        self._auto_push_pending = max(0, self._auto_push_pending - 1)
 
     async def _deliver_auto_push(self, entry: dict[str, Any]) -> None:
         account_id = self._extract_entry_account_id(entry)
@@ -954,17 +1049,19 @@ class QFarmRuntimeManager:
         for idx in range(retry_max + 1):
             attempt = idx + 1
             try:
-                result = await self._send_push_once(
-                    account_id=account_id,
-                    push_cfg=cfg,
-                    title=title,
-                    content=content,
-                    context=context,
-                )
+                await self._acquire_push_rate_slot(account_id=account_id, push_cfg=cfg)
+                async with self._push_semaphore:
+                    result = await self._send_push_once(
+                        account_id=account_id,
+                        push_cfg=cfg,
+                        title=title,
+                        content=content,
+                        context=context,
+                    )
                 self._on_runtime_log(
                     account_id,
                     "push",
-                    f"push delivered: {result.get('message') or 'ok'}",
+                    f"push delivered: {self._sanitize_push_text(str(result.get('message') or 'ok'))}",
                     False,
                     {
                         "module": "push",
@@ -989,11 +1086,11 @@ class QFarmRuntimeManager:
                 if isinstance(e, PushDeliverError):
                     http_status = e.http_status
                     error_code = e.error_code or "deliver_error"
-                    err_msg = str(e)
+                    err_msg = self._sanitize_push_text(str(e))
                 else:
                     http_status = 0
                     error_code = type(e).__name__
-                    err_msg = str(e)
+                    err_msg = self._sanitize_push_text(str(e))
                 self._on_runtime_log(
                     account_id,
                     "push",
@@ -1033,37 +1130,103 @@ class QFarmRuntimeManager:
         endpoint = str(cfg.get("endpoint") or "").strip()
         if not endpoint:
             raise PushDeliverError("push endpoint is empty", error_code="endpoint_empty")
+        endpoint = self._validate_push_endpoint(
+            endpoint,
+            allow_private=bool(cfg.get("allowPrivateEndpoint", False)),
+        )
         token = str(cfg.get("token") or "").strip()
+        include_body_token = bool(cfg.get("bodyTokenEnabled", False))
         headers = {"Content-Type": "application/json"}
         if token:
             headers["Authorization"] = f"Bearer {token}"
         body = {
             "title": str(title or "QFarm Push"),
             "content": str(content or ""),
-            "token": token,
             "accountId": str(account_id or ""),
             "module": str(context.get("module") or ""),
             "event": str(context.get("event") or ""),
             "result": str(context.get("result") or ""),
             "time": str(context.get("time") or time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())),
         }
+        if include_body_token and token:
+            body["token"] = token
         timeout = aiohttp.ClientTimeout(total=10)
         try:
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(endpoint, json=body, headers=headers) as response:
                     text = (await response.text()).strip()
                     if response.status < 200 or response.status >= 300:
-                        snippet = text[:200] if text else "no_response_body"
+                        snippet = self._sanitize_push_text(text if text else "no_response_body")
                         raise PushDeliverError(
                             f"push webhook http {response.status}: {snippet}",
                             http_status=response.status,
                             error_code=f"http_{response.status}",
                         )
-                    return {"httpStatus": int(response.status), "message": text[:200] or "ok"}
+                    return {"httpStatus": int(response.status), "message": self._sanitize_push_text(text) or "ok"}
         except asyncio.TimeoutError as e:
             raise PushDeliverError("push request timeout", error_code="timeout") from e
         except aiohttp.ClientError as e:
-            raise PushDeliverError(f"push request error: {e}", error_code="request_error") from e
+            raise PushDeliverError(self._sanitize_push_text(f"push request error: {e}"), error_code="request_error") from e
+
+    async def _acquire_push_rate_slot(self, *, account_id: str, push_cfg: dict[str, Any]) -> None:
+        key = str(account_id or "").strip()
+        if not key:
+            return
+        limit = max(1, min(600, _to_int(push_cfg.get("maxPerMinute"), 60)))
+        now = time.monotonic()
+        async with self._push_rate_lock:
+            window = self._push_rate_windows.setdefault(key, deque())
+            while window and now - window[0] >= 60:
+                window.popleft()
+            if len(window) >= limit:
+                raise PushDeliverError("push rate limit exceeded", error_code="rate_limited")
+            window.append(now)
+
+    @staticmethod
+    def _is_private_host(host: str) -> bool:
+        name = str(host or "").strip().lower()
+        if not name:
+            return True
+        if name == "localhost" or name.endswith(".localhost"):
+            return True
+        try:
+            ip = ipaddress.ip_address(name)
+        except ValueError:
+            return False
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_reserved
+            or ip.is_multicast
+            or ip.is_unspecified
+        )
+
+    def _validate_push_endpoint(self, endpoint: str, *, allow_private: bool) -> str:
+        target = str(endpoint or "").strip()
+        parsed = urlparse(target)
+        scheme = str(parsed.scheme or "").strip().lower()
+        host = str(parsed.hostname or "").strip()
+        if scheme != "https":
+            raise PushDeliverError("push endpoint scheme must be https", error_code="endpoint_scheme")
+        if not host:
+            raise PushDeliverError("push endpoint host is empty", error_code="endpoint_host_empty")
+        if parsed.username or parsed.password:
+            raise PushDeliverError("push endpoint should not embed credentials", error_code="endpoint_credentials")
+        if not allow_private and self._is_private_host(host):
+            raise PushDeliverError("push endpoint private host is not allowed", error_code="endpoint_private")
+        return target
+
+    def _sanitize_push_text(self, text: str) -> str:
+        raw = str(text or "").strip()
+        if not raw:
+            return ""
+        sanitized = re.sub(
+            r"(?i)(authorization|token|cookie)\s*[:=]\s*[^,\s;]+",
+            r"\1=***",
+            raw,
+        )
+        return sanitized[: self._PUSH_ERROR_SNIPPET_MAX]
 
     def _normalize_accounts_data(self, raw: dict[str, Any]) -> dict[str, Any]:
         data = dict(raw or {})
@@ -1101,29 +1264,31 @@ class QFarmRuntimeManager:
             "startRetryCount": _to_int(row.get("startRetryCount"), 0),
         }
 
-    def _set_runtime_status(self, account_id: str, **patch: Any) -> None:
+    async def _set_runtime_status(self, account_id: str, **patch: Any) -> None:
         account_id_text = str(account_id or "").strip()
         if not account_id_text:
             return
-        status_map = self._runtime_data.setdefault("status", {})
-        if not isinstance(status_map, dict):
-            status_map = {}
-            self._runtime_data["status"] = status_map
-        current = status_map.get(account_id_text, {})
-        if not isinstance(current, dict):
-            current = {}
-        merged = {**current, **patch}
-        status_map[account_id_text] = merged
-        self._save_json_atomic(self.runtime_path, self._runtime_data)
+        async with self._runtime_status_lock:
+            status_map = self._runtime_data.setdefault("status", {})
+            if not isinstance(status_map, dict):
+                status_map = {}
+                self._runtime_data["status"] = status_map
+            current = status_map.get(account_id_text, {})
+            if not isinstance(current, dict):
+                current = {}
+            merged = {**current, **patch}
+            status_map[account_id_text] = merged
+            self._save_json_atomic(self.runtime_path, self._runtime_data)
 
-    def _clear_runtime_status(self, account_id: str) -> None:
-        status_map = self._runtime_data.get("status")
-        if not isinstance(status_map, dict):
-            return
-        if str(account_id) not in status_map:
-            return
-        status_map.pop(str(account_id), None)
-        self._save_json_atomic(self.runtime_path, self._runtime_data)
+    async def _clear_runtime_status(self, account_id: str) -> None:
+        async with self._runtime_status_lock:
+            status_map = self._runtime_data.get("status")
+            if not isinstance(status_map, dict):
+                return
+            if str(account_id) not in status_map:
+                return
+            status_map.pop(str(account_id), None)
+            self._save_json_atomic(self.runtime_path, self._runtime_data)
 
     def _is_retryable_start_error(self, error: str) -> bool:
         text = str(error or "").strip().lower()

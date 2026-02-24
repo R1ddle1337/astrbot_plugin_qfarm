@@ -251,8 +251,10 @@ class QFarmStateStore:
         return json.loads(json.dumps(default))
 
     def _save_json(self, path: Path, data: dict[str, Any]) -> None:
-        with path.open("w", encoding="utf-8") as f:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        with tmp.open("w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+        tmp.replace(path)
 
     def _normalize_owner_bindings(self, raw: dict[str, Any]) -> dict[str, Any]:
         owners_raw = raw.get("owners", {}) if isinstance(raw, dict) else {}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from astrbot_plugin_qfarm.services.state_store import QFarmStateStore
@@ -48,3 +49,14 @@ def test_render_theme_persist(tmp_path: Path):
 
     reloaded = QFarmStateStore(tmp_path)
     assert reloaded.get_render_theme() == "dark"
+
+
+def test_state_store_save_is_atomic_without_tmp_residue(tmp_path: Path):
+    store = QFarmStateStore(tmp_path)
+    store.bind_account("u1", "acc-1", "A")
+    store.add_whitelist_user("u2")
+
+    assert not list(tmp_path.rglob("*.tmp"))
+
+    bindings = json.loads((tmp_path / "bindings_v2.json").read_text(encoding="utf-8"))
+    assert bindings["owners"]["u1"]["account_id"] == "acc-1"
