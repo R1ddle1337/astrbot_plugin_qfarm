@@ -110,6 +110,11 @@ async def test_automation_all_on_sets_all_keys_and_fertilizer(tmp_path: Path):
         "friend_help",
         "friend_bad",
         "task",
+        "email",
+        "mall",
+        "monthcard",
+        "vip",
+        "share",
         "sell",
     ):
         assert automation.get(key) is True
@@ -136,6 +141,11 @@ async def test_automation_all_off_sets_all_keys_and_fertilizer_none(tmp_path: Pa
         "friend_help",
         "friend_bad",
         "task",
+        "email",
+        "mall",
+        "monthcard",
+        "vip",
+        "share",
         "sell",
     ):
         assert automation.get(key) is False

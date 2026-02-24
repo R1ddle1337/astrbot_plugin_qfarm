@@ -31,6 +31,11 @@ DEFAULT_ACCOUNT_CONFIG = {
         "friend_help": True,
         "friend_bad": False,
         "task": True,
+        "email": True,
+        "mall": True,
+        "monthcard": True,
+        "vip": True,
+        "share": True,
         "sell": True,
         "fertilizer": "both",
     },
@@ -49,6 +54,7 @@ DEFAULT_ACCOUNT_CONFIG = {
         "start": "23:00",
         "end": "07:00",
     },
+    "dailyRoutines": {},
 }
 
 
@@ -71,6 +77,7 @@ class QFarmRuntimeManager:
         runtime_log_max_entries: int = 3000,
         runtime_log_flush_interval_sec: float = 2.0,
         runtime_log_flush_batch: int = 80,
+        default_automation: dict[str, Any] | None = None,
         logger: Any | None = None,
     ) -> None:
         self.plugin_root = Path(plugin_root)
@@ -96,6 +103,17 @@ class QFarmRuntimeManager:
         self.runtime_log_max_entries = max(1, int(runtime_log_max_entries))
         self.runtime_log_flush_interval_sec = max(0.2, float(runtime_log_flush_interval_sec))
         self.runtime_log_flush_batch = max(1, int(runtime_log_flush_batch))
+        self._default_account_config = json.loads(json.dumps(DEFAULT_ACCOUNT_CONFIG))
+        incoming_auto = default_automation if isinstance(default_automation, dict) else {}
+        base_auto = self._default_account_config.setdefault("automation", {})
+        for key, value in incoming_auto.items():
+            if key not in base_auto:
+                continue
+            if key == "fertilizer":
+                mode = str(value or "both").strip().lower()
+                base_auto[key] = mode if mode in {"both", "normal", "organic", "none"} else "both"
+                continue
+            base_auto[key] = bool(value)
         self.config_data = GameConfigData(self.plugin_root)
         self.analytics = AnalyticsService(self.config_data)
         self.qr_login = QFarmQRLogin()
@@ -112,7 +130,7 @@ class QFarmRuntimeManager:
         self._accounts = self._load_json(self.accounts_path, {"accounts": [], "nextId": 1})
         self._settings = self._load_json(
             self.settings_path,
-            {"accountConfigs": {}, "defaultAccountConfig": DEFAULT_ACCOUNT_CONFIG, "ui": {"theme": "dark"}, "__revision": int(time.time())},
+            {"accountConfigs": {}, "defaultAccountConfig": self._default_account_config, "ui": {"theme": "dark"}, "__revision": int(time.time())},
         )
         self._runtime_data = self._load_json(self.runtime_path, {"status": {}})
         if not isinstance(self._runtime_data.get("status"), dict):
@@ -348,6 +366,7 @@ class QFarmRuntimeManager:
                     logger=self.logger,
                     log_callback=self._on_runtime_log,
                     kicked_callback=self._on_runtime_kicked,
+                    runtime_state_persist=lambda patch, aid=account_id_text: self._persist_runtime_state_patch(aid, patch),
                 )
                 self._runtimes[account_id_text] = runtime
                 try:
@@ -438,6 +457,7 @@ class QFarmRuntimeManager:
             "expProgress": {"current": 0, "needed": 0, "level": 0},
             "configRevision": _to_int(self._settings.get("__revision"), 0),
             "nextChecks": {"farmRemainSec": 0, "friendRemainSec": 0},
+            "dailyRoutines": self._get_account_settings(account_id_text).get("dailyRoutines", {}),
         }
         result.update(self._runtime_status_view(account_id_text, is_running=False))
         return result
@@ -507,6 +527,15 @@ class QFarmRuntimeManager:
     async def claim_share_reward(self, account_id: str | int, claimed: bool = True) -> dict[str, Any]:
         return await self._require_runtime(account_id).claim_share_reward(bool(claimed))
 
+    async def run_daily_routine(self, account_id: str | int, routine: str, force: bool = False) -> dict[str, Any]:
+        return await self._require_runtime(account_id).run_daily_routine(str(routine or ""), force=bool(force))
+
+    async def run_daily_routines(self, account_id: str | int, force: bool = False) -> dict[str, Any]:
+        return await self._require_runtime(account_id).run_daily_routines(force=bool(force))
+
+    async def get_daily_routines(self, account_id: str | int) -> dict[str, Any]:
+        return await self._require_runtime(account_id).get_daily_routines_state()
+
     async def get_analytics(self, account_id: str | int, sort_by: str) -> list[dict[str, Any]]:
         runtime = self._runtimes.get(str(account_id))
         if runtime:
@@ -534,6 +563,20 @@ class QFarmRuntimeManager:
             runtime.apply_settings(self._get_account_settings(account_id_text), revision)
         return await self.get_settings(account_id_text)
 
+    async def _persist_runtime_state_patch(self, account_id: str, payload: dict[str, Any]) -> None:
+        account_id_text = str(account_id or "").strip()
+        if not account_id_text:
+            return
+        patch = payload if isinstance(payload, dict) else {}
+        if not patch:
+            return
+        async with self._state_lock:
+            current = self._get_account_settings(account_id_text)
+            next_cfg = self._merge_settings(current, patch)
+            cfg_map = self._settings.setdefault("accountConfigs", {})
+            cfg_map[account_id_text] = next_cfg
+            self._save_json_atomic(self.settings_path, self._settings)
+
     async def get_settings(self, account_id: str | int) -> dict[str, Any]:
         account_id_text = str(account_id or "").strip()
         cfg = self._get_account_settings(account_id_text)
@@ -543,6 +586,7 @@ class QFarmRuntimeManager:
             "preferredSeed": cfg.get("preferredSeedId", 0),
             "friendQuietHours": cfg.get("friendQuietHours", {}),
             "automation": cfg.get("automation", {}),
+            "dailyRoutines": cfg.get("dailyRoutines", {}),
             "ui": self._settings.get("ui", {"theme": "dark"}),
         }
 
@@ -637,11 +681,47 @@ class QFarmRuntimeManager:
         if "seedId" in src:
             result["preferredSeedId"] = max(0, _to_int(src.get("seedId"), 0))
         if isinstance(src.get("automation"), dict):
-            result.setdefault("automation", {}).update(src.get("automation"))
+            allowed = set((DEFAULT_ACCOUNT_CONFIG.get("automation") or {}).keys())
+            merged_auto = result.setdefault("automation", {})
+            for key, value in src.get("automation", {}).items():
+                if key not in allowed:
+                    continue
+                if key == "fertilizer":
+                    mode = str(value or "both").strip().lower()
+                    merged_auto[key] = mode if mode in {"both", "normal", "organic", "none"} else "both"
+                    continue
+                merged_auto[key] = bool(value)
         if isinstance(src.get("intervals"), dict):
             result.setdefault("intervals", {}).update(src.get("intervals"))
         if isinstance(src.get("friendQuietHours"), dict):
             result.setdefault("friendQuietHours", {}).update(src.get("friendQuietHours"))
+        if isinstance(src.get("dailyRoutines"), dict):
+            result["dailyRoutines"] = self._merge_daily_routines(result.get("dailyRoutines"), src.get("dailyRoutines"))
+        return result
+
+    @staticmethod
+    def _merge_daily_routines(base: Any, patch: Any) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        for source in (base, patch):
+            if not isinstance(source, dict):
+                continue
+            for key, value in source.items():
+                routine_key = str(key or "").strip()
+                if not routine_key:
+                    continue
+                current = result.setdefault(routine_key, {})
+                if not isinstance(value, dict):
+                    continue
+                if "doneDateKey" in value:
+                    current["doneDateKey"] = str(value.get("doneDateKey") or "")
+                if "lastCheckAt" in value:
+                    current["lastCheckAt"] = max(0, _to_int(value.get("lastCheckAt"), 0))
+                if "lastClaimAt" in value:
+                    current["lastClaimAt"] = max(0, _to_int(value.get("lastClaimAt"), 0))
+                if "lastResult" in value:
+                    current["lastResult"] = str(value.get("lastResult") or "")
+                if "lastError" in value:
+                    current["lastError"] = str(value.get("lastError") or "")
         return result
 
     def _normalize_accounts_data(self, raw: dict[str, Any]) -> dict[str, Any]:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import random
 import time
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from ..domain.analytics_service import AnalyticsService
 from ..domain.config_data import GameConfigData
@@ -38,9 +38,23 @@ DEFAULT_AUTOMATION = {
     "friend_help": True,
     "friend_bad": False,
     "task": True,
+    "email": True,
+    "mall": True,
+    "monthcard": True,
+    "vip": True,
+    "share": True,
     "sell": True,
     "fertilizer": "both",
 }
+
+DAILY_ROUTINE_KEY_EMAIL = "email_rewards"
+DAILY_ROUTINE_KEY_MALL_FREE = "mall_free_gifts"
+DAILY_ROUTINE_KEY_MALL_ORGANIC = "mall_organic_fertilizer"
+DAILY_ROUTINE_KEY_SHARE = "daily_share"
+DAILY_ROUTINE_KEY_VIP = "vip_daily_gift"
+DAILY_ROUTINE_KEY_MONTHCARD = "month_card_gift"
+
+ORGANIC_FERTILIZER_GOODS_ID = 1002
 
 
 class AccountRuntime:
@@ -57,6 +71,7 @@ class AccountRuntime:
         logger: Any | None = None,
         log_callback: Any | None = None,
         kicked_callback: Any | None = None,
+        runtime_state_persist: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
     ) -> None:
         self.account = dict(account)
         self.settings = dict(settings)
@@ -66,6 +81,7 @@ class AccountRuntime:
         self.logger = logger
         self.log_callback = log_callback
         self.kicked_callback = kicked_callback
+        self.runtime_state_persist = runtime_state_persist
 
         self.session = GatewaySession(session_config, logger=logger)
         self.analytics = AnalyticsService(config_data)
@@ -121,6 +137,7 @@ class AccountRuntime:
         self._invite_processed = False
         self._invite_task: asyncio.Task | None = None
         self._last_plant_skip_reason = ""
+        self._daily_routines = self._normalize_daily_routines(self.settings.get("dailyRoutines"))
 
     async def start(self) -> None:
         if self.running:
@@ -164,6 +181,7 @@ class AccountRuntime:
     def apply_settings(self, settings: dict[str, Any], revision: int) -> None:
         self.settings = dict(settings)
         self.settings_revision = max(self.settings_revision, _to_int(revision, 0))
+        self._daily_routines = self._normalize_daily_routines(self.settings.get("dailyRoutines"))
         self._reset_schedule()
 
     def update_account(self, account: dict[str, Any]) -> None:
@@ -197,6 +215,7 @@ class AccountRuntime:
                 "farmRemainSec": max(0, int(self._next_farm_at - time.time())),
                 "friendRemainSec": max(0, int(self._next_friend_at - time.time())),
             },
+            "dailyRoutines": self._daily_routines_snapshot(),
         }
 
     async def get_lands(self) -> dict[str, Any]:
@@ -356,6 +375,311 @@ class AccountRuntime:
             "items": self._format_core_items(list(reply.items or [])),
         }
 
+    async def run_daily_routine(self, routine: str, force: bool = False) -> dict[str, Any]:
+        token = str(routine or "").strip().lower()
+        if token in {"email", "mail"}:
+            return await self._run_email_routine(force=bool(force))
+        if token in {"mall", "shop"}:
+            free = await self._run_mall_free_gifts_routine(force=bool(force))
+            organic = await self._run_mall_organic_routine(force=bool(force))
+            return {"routine": "mall", "freeGifts": free, "organicFertilizer": organic}
+        if token in {"monthcard", "month_card"}:
+            return await self._run_monthcard_routine(force=bool(force))
+        if token in {"vip", "qqvip"}:
+            return await self._run_vip_routine(force=bool(force))
+        if token in {"share"}:
+            return await self._run_share_routine(force=bool(force))
+        if token in {"all", "*"}:
+            return await self.run_daily_routines(force=bool(force))
+        raise RuntimeError(f"unsupported daily routine: {routine}")
+
+    async def run_daily_routines(self, force: bool = False) -> dict[str, Any]:
+        auto = self._automation()
+        result: dict[str, Any] = {"force": bool(force)}
+        if auto.get("email", True):
+            result["email"] = await self._run_email_routine(force=bool(force))
+        if auto.get("mall", True):
+            result["mallFreeGifts"] = await self._run_mall_free_gifts_routine(force=bool(force))
+            result["mallOrganicFertilizer"] = await self._run_mall_organic_routine(force=bool(force))
+        if auto.get("share", True):
+            result["share"] = await self._run_share_routine(force=bool(force))
+        if auto.get("monthcard", True):
+            result["monthcard"] = await self._run_monthcard_routine(force=bool(force))
+        if auto.get("vip", True):
+            result["vip"] = await self._run_vip_routine(force=bool(force))
+        return result
+
+    async def get_daily_routines_state(self) -> dict[str, Any]:
+        return self._daily_routines_snapshot()
+
+    async def _run_email_routine(self, *, force: bool = False) -> dict[str, Any]:
+        routine_key = DAILY_ROUTINE_KEY_EMAIL
+        if not await self._routine_can_run(routine_key, cooldown_sec=300, force=force):
+            return {"routine": routine_key, "skipped": True, "state": self._routine_state(routine_key)}
+        try:
+            box1, box2 = await asyncio.gather(
+                self.get_email_list(1),
+                self.get_email_list(2),
+            )
+            merged: dict[str, dict[str, Any]] = {}
+            for box_type, rows in ((1, box1.get("emails", [])), (2, box2.get("emails", []))):
+                for row in list(rows or []):
+                    email_id = str((row or {}).get("id") or "").strip()
+                    if not email_id:
+                        continue
+                    current = dict(row or {})
+                    current["_boxType"] = box_type
+                    old = merged.get(email_id)
+                    if old is None:
+                        merged[email_id] = current
+                        continue
+                    old_claimable = bool(old.get("hasReward")) and not bool(old.get("claimed"))
+                    now_claimable = bool(current.get("hasReward")) and not bool(current.get("claimed"))
+                    if now_claimable and not old_claimable:
+                        merged[email_id] = current
+
+            claimable = [
+                row for row in merged.values() if bool(row.get("hasReward")) and not bool(row.get("claimed"))
+            ]
+            if not claimable:
+                await self._mark_routine_done(routine_key, result="none", error="")
+                self._debug_log("daily", "email routine: no claimable mails", module="task", event=routine_key, result="none")
+                return {"routine": routine_key, "claimed": 0, "rewardItems": 0, "state": self._routine_state(routine_key)}
+
+            claimed = 0
+            reward_items = 0
+            grouped: dict[int, list[dict[str, Any]]] = {}
+            for row in claimable:
+                box_type = _to_int(row.get("_boxType"), 1)
+                grouped.setdefault(box_type if box_type in {1, 2} else 1, []).append(row)
+            for box_type, rows in grouped.items():
+                first_id = str((rows[0] or {}).get("id") or "").strip()
+                if not first_id:
+                    continue
+                try:
+                    batch_reply = await self.claim_email(box_type, first_id, batch=True)
+                    claimed += 1
+                    reward_items += len(batch_reply.get("items", []))
+                except Exception:
+                    pass
+            for row in claimable:
+                box_type = _to_int(row.get("_boxType"), 1)
+                email_id = str(row.get("id") or "").strip()
+                if not email_id:
+                    continue
+                try:
+                    claim_reply = await self.claim_email(box_type, email_id, batch=False)
+                    claimed += 1
+                    reward_items += len(claim_reply.get("items", []))
+                except Exception:
+                    continue
+            if claimed > 0:
+                await self._mark_routine_done(routine_key, result="ok", claimed=True, error="")
+                self._debug_log(
+                    "daily",
+                    f"email routine claimed: {claimed}",
+                    module="task",
+                    event=routine_key,
+                    result="ok",
+                    count=claimed,
+                )
+            else:
+                await self._mark_routine_done(routine_key, result="none", error="")
+            return {"routine": routine_key, "claimed": claimed, "rewardItems": reward_items, "state": self._routine_state(routine_key)}
+        except Exception as e:
+            await self._mark_routine_error(routine_key, str(e))
+            self._debug_log("daily", f"email routine failed: {e}", module="task", event=routine_key, result="error")
+            return {"routine": routine_key, "claimed": 0, "rewardItems": 0, "error": str(e), "state": self._routine_state(routine_key)}
+
+    async def _run_mall_free_gifts_routine(self, *, force: bool = False) -> dict[str, Any]:
+        routine_key = DAILY_ROUTINE_KEY_MALL_FREE
+        if not await self._routine_can_run(routine_key, cooldown_sec=600, force=force):
+            return {"routine": routine_key, "skipped": True, "state": self._routine_state(routine_key)}
+        try:
+            payload = await self.get_mall_goods(1)
+            goods = list(payload.get("goods", []))
+            freebies = [row for row in goods if bool((row or {}).get("isFree")) and _to_int((row or {}).get("goodsId"), 0) > 0]
+            if not freebies:
+                await self._mark_routine_done(routine_key, result="none", error="")
+                self._debug_log("daily", "mall free gifts: none", module="task", event=routine_key, result="none")
+                return {"routine": routine_key, "claimed": 0, "state": self._routine_state(routine_key)}
+            claimed = 0
+            for row in freebies:
+                goods_id = _to_int(row.get("goodsId"), 0)
+                if goods_id <= 0:
+                    continue
+                try:
+                    await self.purchase_mall_goods(goods_id, 1)
+                    claimed += 1
+                except Exception:
+                    continue
+            await self._mark_routine_done(routine_key, result="ok" if claimed > 0 else "none", claimed=claimed > 0, error="")
+            self._debug_log(
+                "daily",
+                f"mall free gifts claimed: {claimed}",
+                module="task",
+                event=routine_key,
+                result="ok" if claimed > 0 else "none",
+                count=claimed,
+            )
+            return {"routine": routine_key, "claimed": claimed, "state": self._routine_state(routine_key)}
+        except Exception as e:
+            await self._mark_routine_error(routine_key, str(e))
+            self._debug_log("daily", f"mall free gifts failed: {e}", module="task", event=routine_key, result="error")
+            return {"routine": routine_key, "claimed": 0, "error": str(e), "state": self._routine_state(routine_key)}
+
+    async def _run_mall_organic_routine(self, *, force: bool = False) -> dict[str, Any]:
+        routine_key = DAILY_ROUTINE_KEY_MALL_ORGANIC
+        if not await self._routine_can_run(routine_key, cooldown_sec=600, force=force):
+            return {"routine": routine_key, "skipped": True, "state": self._routine_state(routine_key)}
+        try:
+            goods_list = await self.mall.get_mall_goods_list(1)
+            target = None
+            for row in goods_list:
+                if _to_int(getattr(row, "goods_id", 0), 0) == ORGANIC_FERTILIZER_GOODS_ID:
+                    target = row
+                    break
+            if target is None:
+                await self._mark_routine_done(routine_key, result="none", error="")
+                return {"routine": routine_key, "bought": 0, "state": self._routine_state(routine_key)}
+
+            price = self._parse_mall_price_value(getattr(target, "price", b""))
+            coupon = max(0, _to_int(self.user_state.get("coupon"), 0))
+            if price > 0 and coupon < price:
+                await self._mark_routine_done(routine_key, result="no_coupon", error="")
+                return {"routine": routine_key, "bought": 0, "pausedNoCoupon": True, "state": self._routine_state(routine_key)}
+
+            bought = 0
+            per_round = 10
+            for _ in range(30):
+                if price > 0 and coupon < price:
+                    break
+                count = per_round
+                if price > 0:
+                    affordable = max(0, coupon // price)
+                    if affordable <= 0:
+                        break
+                    count = max(1, min(per_round, affordable))
+                try:
+                    await self.purchase_mall_goods(ORGANIC_FERTILIZER_GOODS_ID, count)
+                    bought += count
+                    if price > 0:
+                        coupon = max(0, coupon - (price * count))
+                    await asyncio.sleep(0.12)
+                except Exception as e:
+                    message = str(e or "")
+                    if ("code=1000019" in message or "余额不足" in message or "点券不足" in message) and count > 1:
+                        per_round = 1
+                        continue
+                    if "code=1000019" in message or "余额不足" in message or "点券不足" in message:
+                        await self._mark_routine_done(routine_key, result="no_coupon", error="")
+                    break
+
+            if bought > 0:
+                self.user_state["coupon"] = coupon
+                await self._mark_routine_done(routine_key, result="ok", claimed=True, error="")
+            elif self._routine_state(routine_key).get("lastResult") == "no_coupon":
+                pass
+            else:
+                await self._mark_routine_done(routine_key, result="none", error="")
+            return {"routine": routine_key, "bought": bought, "state": self._routine_state(routine_key)}
+        except Exception as e:
+            await self._mark_routine_error(routine_key, str(e))
+            self._debug_log("daily", f"mall organic routine failed: {e}", module="task", event=routine_key, result="error")
+            return {"routine": routine_key, "bought": 0, "error": str(e), "state": self._routine_state(routine_key)}
+
+    async def _run_monthcard_routine(self, *, force: bool = False) -> dict[str, Any]:
+        routine_key = DAILY_ROUTINE_KEY_MONTHCARD
+        if not await self._routine_can_run(routine_key, cooldown_sec=600, force=force):
+            return {"routine": routine_key, "skipped": True, "state": self._routine_state(routine_key)}
+        try:
+            infos_payload = await self.get_monthcard_infos()
+            infos = list(infos_payload.get("infos", []))
+            claimable = [row for row in infos if bool((row or {}).get("canClaim")) and _to_int((row or {}).get("goodsId"), 0) > 0]
+            if not claimable:
+                await self._mark_routine_done(routine_key, result="none", error="")
+                return {"routine": routine_key, "claimed": 0, "state": self._routine_state(routine_key)}
+            claimed = 0
+            reward_items = 0
+            for row in claimable:
+                goods_id = _to_int(row.get("goodsId"), 0)
+                if goods_id <= 0:
+                    continue
+                try:
+                    rep = await self.claim_monthcard_reward(goods_id)
+                    claimed += 1
+                    reward_items += len(rep.get("items", []))
+                except Exception:
+                    continue
+            if claimed > 0:
+                await self._mark_routine_done(routine_key, result="ok", claimed=True, error="")
+            else:
+                await self._mark_routine_done(routine_key, result="none", error="")
+            return {"routine": routine_key, "claimed": claimed, "rewardItems": reward_items, "state": self._routine_state(routine_key)}
+        except Exception as e:
+            await self._mark_routine_error(routine_key, str(e))
+            self._debug_log("daily", f"monthcard routine failed: {e}", module="task", event=routine_key, result="error")
+            return {"routine": routine_key, "claimed": 0, "error": str(e), "state": self._routine_state(routine_key)}
+
+    async def _run_vip_routine(self, *, force: bool = False) -> dict[str, Any]:
+        routine_key = DAILY_ROUTINE_KEY_VIP
+        if not await self._routine_can_run(routine_key, cooldown_sec=600, force=force):
+            return {"routine": routine_key, "skipped": True, "state": self._routine_state(routine_key)}
+        try:
+            status = await self.get_vip_daily_status()
+            if not bool(status.get("canClaim")):
+                await self._mark_routine_done(routine_key, result="none", error="")
+                return {"routine": routine_key, "claimed": False, "state": self._routine_state(routine_key)}
+            claim = await self.claim_vip_daily_gift()
+            await self._mark_routine_done(routine_key, result="ok", claimed=True, error="")
+            return {
+                "routine": routine_key,
+                "claimed": True,
+                "rewardItems": len(claim.get("items", [])),
+                "state": self._routine_state(routine_key),
+            }
+        except Exception as e:
+            message = str(e or "")
+            if "code=1021002" in message or "已领取" in message or "今日已领" in message:
+                await self._mark_routine_done(routine_key, result="none", claimed=True, error="")
+                return {"routine": routine_key, "claimed": False, "alreadyClaimed": True, "state": self._routine_state(routine_key)}
+            await self._mark_routine_error(routine_key, message)
+            self._debug_log("daily", f"vip routine failed: {e}", module="task", event=routine_key, result="error")
+            return {"routine": routine_key, "claimed": False, "error": message, "state": self._routine_state(routine_key)}
+
+    async def _run_share_routine(self, *, force: bool = False) -> dict[str, Any]:
+        routine_key = DAILY_ROUTINE_KEY_SHARE
+        if not await self._routine_can_run(routine_key, cooldown_sec=600, force=force):
+            return {"routine": routine_key, "skipped": True, "state": self._routine_state(routine_key)}
+        try:
+            can = await self.check_can_share()
+            if not bool(can.get("canShare")):
+                await self._mark_routine_done(routine_key, result="none", error="")
+                return {"routine": routine_key, "claimed": False, "state": self._routine_state(routine_key)}
+            report = await self.report_share(True)
+            if not bool(report.get("success")):
+                await self._mark_routine_error(routine_key, "report_share_failed")
+                return {"routine": routine_key, "claimed": False, "error": "report_share_failed", "state": self._routine_state(routine_key)}
+            claim = await self.claim_share_reward(True)
+            if bool(claim.get("success")):
+                await self._mark_routine_done(routine_key, result="ok", claimed=True, error="")
+                return {
+                    "routine": routine_key,
+                    "claimed": True,
+                    "rewardItems": len(claim.get("items", [])),
+                    "state": self._routine_state(routine_key),
+                }
+            await self._mark_routine_done(routine_key, result="none", error="")
+            return {"routine": routine_key, "claimed": False, "state": self._routine_state(routine_key)}
+        except Exception as e:
+            message = str(e or "")
+            if "code=1009001" in message or "已领取" in message:
+                await self._mark_routine_done(routine_key, result="none", claimed=True, error="")
+                return {"routine": routine_key, "claimed": False, "alreadyClaimed": True, "state": self._routine_state(routine_key)}
+            await self._mark_routine_error(routine_key, message)
+            self._debug_log("daily", f"share routine failed: {e}", module="task", event=routine_key, result="error")
+            return {"routine": routine_key, "claimed": False, "error": message, "state": self._routine_state(routine_key)}
+
     async def _connect_and_login(self) -> None:
         code = str(self.account.get("code") or "").strip()
         if not code:
@@ -391,6 +715,7 @@ class AccountRuntime:
             self._invite_processed = True
             self._invite_task = asyncio.create_task(self._process_invite_codes_once())
         self._reset_schedule()
+        asyncio.create_task(self.run_daily_routines(force=True))
 
     async def _heartbeat_loop(self) -> None:
         while self.running:
@@ -422,6 +747,7 @@ class AccountRuntime:
                         await self.do_farm_operation("all")
                     if auto.get("task", True):
                         await self.check_and_claim_tasks()
+                    await self.run_daily_routines(force=False)
                     self._next_farm_at = now + self._rand_interval("farm")
                 if now >= self._next_friend_at:
                     if auto.get("friend", True) and not self._in_friend_quiet_hours():
@@ -842,6 +1168,148 @@ class AccountRuntime:
         result = await self.warehouse.sell_all_fruits()
         if _to_int(result.get("soldKinds"), 0) > 0:
             self._record("sell", 1)
+
+    @staticmethod
+    def _parse_mall_price_value(raw: Any) -> int:
+        if raw is None:
+            return 0
+        if isinstance(raw, int):
+            return max(0, int(raw))
+        if isinstance(raw, (bytes, bytearray)):
+            data = bytes(raw)
+        else:
+            try:
+                data = bytes(raw or b"")
+            except Exception:
+                return 0
+        if not data:
+            return 0
+        idx = 0
+        parsed = 0
+        length = len(data)
+        while idx < length:
+            key = data[idx]
+            idx += 1
+            field = key >> 3
+            wire = key & 0x07
+            if wire != 0:
+                break
+            value = 0
+            shift = 0
+            while idx < length:
+                b = data[idx]
+                idx += 1
+                value |= (b & 0x7F) << shift
+                if (b & 0x80) == 0:
+                    break
+                shift += 7
+            if field == 2:
+                parsed = value
+        return max(0, int(parsed))
+
+    def _today_key(self) -> str:
+        now = time.localtime()
+        return f"{now.tm_year:04d}-{now.tm_mon:02d}-{now.tm_mday:02d}"
+
+    def _normalize_daily_routines(self, raw: Any) -> dict[str, dict[str, Any]]:
+        result: dict[str, dict[str, Any]] = {}
+        if not isinstance(raw, dict):
+            return result
+        for key, value in raw.items():
+            routine_key = str(key or "").strip()
+            if not routine_key or not isinstance(value, dict):
+                continue
+            result[routine_key] = {
+                "doneDateKey": str(value.get("doneDateKey") or ""),
+                "lastCheckAt": max(0, _to_int(value.get("lastCheckAt"), 0)),
+                "lastClaimAt": max(0, _to_int(value.get("lastClaimAt"), 0)),
+                "lastResult": str(value.get("lastResult") or ""),
+                "lastError": str(value.get("lastError") or ""),
+            }
+        return result
+
+    def _daily_routines_snapshot(self) -> dict[str, dict[str, Any]]:
+        data: dict[str, dict[str, Any]] = {}
+        for key, value in self._daily_routines.items():
+            if not isinstance(value, dict):
+                continue
+            data[str(key)] = {
+                "doneDateKey": str(value.get("doneDateKey") or ""),
+                "lastCheckAt": max(0, _to_int(value.get("lastCheckAt"), 0)),
+                "lastClaimAt": max(0, _to_int(value.get("lastClaimAt"), 0)),
+                "lastResult": str(value.get("lastResult") or ""),
+                "lastError": str(value.get("lastError") or ""),
+            }
+        return data
+
+    def _routine_state(self, key: str) -> dict[str, Any]:
+        routine_key = str(key or "").strip()
+        if not routine_key:
+            return {"doneDateKey": "", "lastCheckAt": 0, "lastClaimAt": 0, "lastResult": "", "lastError": ""}
+        current = self._daily_routines.get(routine_key)
+        if not isinstance(current, dict):
+            current = {"doneDateKey": "", "lastCheckAt": 0, "lastClaimAt": 0, "lastResult": "", "lastError": ""}
+            self._daily_routines[routine_key] = current
+        return {
+            "doneDateKey": str(current.get("doneDateKey") or ""),
+            "lastCheckAt": max(0, _to_int(current.get("lastCheckAt"), 0)),
+            "lastClaimAt": max(0, _to_int(current.get("lastClaimAt"), 0)),
+            "lastResult": str(current.get("lastResult") or ""),
+            "lastError": str(current.get("lastError") or ""),
+        }
+
+    async def _persist_daily_routines(self) -> None:
+        if not self.runtime_state_persist:
+            return
+        try:
+            await self.runtime_state_persist({"dailyRoutines": self._daily_routines_snapshot()})
+        except Exception as e:
+            self._debug_log("daily", f"persist daily routines failed: {e}", module="task", event="daily_state_persist", result="error")
+
+    async def _routine_can_run(self, key: str, cooldown_sec: int, force: bool) -> bool:
+        routine_key = str(key or "").strip()
+        if not routine_key:
+            return False
+        state = self._routine_state(routine_key)
+        now_ms = int(time.time() * 1000)
+        if not force and state.get("doneDateKey") == self._today_key():
+            return False
+        last_check_at = max(0, _to_int(state.get("lastCheckAt"), 0))
+        if not force and now_ms - last_check_at < max(1, int(cooldown_sec)) * 1000:
+            return False
+        self._daily_routines[routine_key] = {
+            **state,
+            "lastCheckAt": now_ms,
+        }
+        await self._persist_daily_routines()
+        return True
+
+    async def _mark_routine_done(self, key: str, *, result: str, claimed: bool = False, error: str = "") -> None:
+        routine_key = str(key or "").strip()
+        if not routine_key:
+            return
+        now_ms = int(time.time() * 1000)
+        state = self._routine_state(routine_key)
+        self._daily_routines[routine_key] = {
+            **state,
+            "doneDateKey": self._today_key(),
+            "lastResult": str(result or ""),
+            "lastError": str(error or ""),
+            "lastClaimAt": now_ms if claimed else max(0, _to_int(state.get("lastClaimAt"), 0)),
+        }
+        await self._persist_daily_routines()
+
+    async def _mark_routine_error(self, key: str, error: str) -> None:
+        routine_key = str(key or "").strip()
+        if not routine_key:
+            return
+        state = self._routine_state(routine_key)
+        self._daily_routines[routine_key] = {
+            **state,
+            "lastResult": "error",
+            "lastError": str(error or ""),
+        }
+        await self._persist_daily_routines()
 
     async def _on_notify(self, message_type: str, payload: bytes) -> None:
         if "Kickout" in message_type:

@@ -267,6 +267,22 @@ pip install -r requirements-dev.txt
 - 扫码登录二维码已改为插件本地生成 PNG（缓存目录：插件 data 下 `qr_cache/`）。
 - 纯 Python 主链已移除 `api.qrserver.com` 依赖。
 
+## Phase-2 Automation (No WebUI)
+
+- New command groups:
+  - `qfarm 邮件 查看|领取`
+  - `qfarm 商城 列表|领取|购买 <goodsId> [count]`
+  - `qfarm 月卡 查看|领取`
+  - `qfarm 会员 查看|领取`
+  - `qfarm 分享 查看|领取`
+- New automation keys:
+  - `automation.email`
+  - `automation.mall`
+  - `automation.monthcard`
+  - `automation.vip`
+  - `automation.share`
+- Daily routine state is now persisted in account settings (`dailyRoutines`) with date-based idempotency and cooldown metadata.
+
 ## Release Policy
 
 - 每次准备推送到 GitHub 前，必须先升级版本号并同步以下 3 个位置：
@@ -284,7 +300,13 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.3.1
+- Current release: v2.4.0
+- 2026-02-24 v2.4.0
+- Reason: deliver phase-2 no-WebUI parity by adding email/mall/monthcard/vip/share commands and automated daily routines with persisted state.
+- Change: add daily routine runtime pipeline (`email/mall/monthcard/vip/share`), command router entries, automation keys, config schema keys, and related tests.
+- Impact: users can now trigger and automate daily gift flows directly from `qfarm` without changing existing farm/friend command behavior.
+- Risk: daily routine retries and external mall/vip/share RPC behavior may differ across accounts; monitor runtime logs for account-specific protocol edge cases.
+- Verification: `PYTHONPATH=d:\botproject python -m pytest tests -q` passed (`86 passed`).
 - 2026-02-24 v2.3.1
 - Reason: enforce mandatory README release logging and pre-push consistency checks for every update.
 - Change: add release policy validator script + tests, and standardize README release entry template.

@@ -22,7 +22,7 @@ from .services.state_store import QFarmStateStore
     "astrbot_plugin_qfarm",
     "riddle",
     "AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 实现）",
-    "2.3.1",
+    "2.4.0",
     "https://github.com/R1ddle1337/astrbot_plugin_qfarm",
 )
 class QFarmPlugin(Star):
@@ -62,6 +62,13 @@ class QFarmPlugin(Star):
         runtime_log_flush_interval_sec = self._cfg_float("runtime_log_flush_interval_sec", 2.0)
         runtime_log_flush_batch = self._cfg_int("runtime_log_flush_batch", 80)
         per_user_inflight_limit = self._cfg_int("per_user_inflight_limit", 1)
+        default_automation = {
+            "email": self._cfg_bool("automation.email", True),
+            "mall": self._cfg_bool("automation.mall", True),
+            "monthcard": self._cfg_bool("automation.monthcard", True),
+            "vip": self._cfg_bool("automation.vip", True),
+            "share": self._cfg_bool("automation.share", True),
+        }
 
         self.state_store = QFarmStateStore(
             data_dir=self.plugin_data_dir,
@@ -85,6 +92,7 @@ class QFarmPlugin(Star):
             runtime_log_max_entries=runtime_log_max_entries,
             runtime_log_flush_interval_sec=runtime_log_flush_interval_sec,
             runtime_log_flush_batch=runtime_log_flush_batch,
+            default_automation=default_automation,
             managed_mode=managed_mode,
             logger=logger,
         )

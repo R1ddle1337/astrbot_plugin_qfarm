@@ -29,6 +29,16 @@ COMPOUND_COMMAND_MAP: dict[str, list[str]] = {
     "\u81ea\u52a8\u5316\u67e5\u770b": ["\u81ea\u52a8\u5316", "\u67e5\u770b"],
     "\u80cc\u5305\u67e5\u770b": ["\u80cc\u5305", "\u67e5\u770b"],
     "\u79cd\u5b50\u5217\u8868": ["\u79cd\u5b50", "\u5217\u8868"],
+    "\u90ae\u4ef6\u67e5\u770b": ["\u90ae\u4ef6", "\u67e5\u770b"],
+    "\u90ae\u4ef6\u9886\u53d6": ["\u90ae\u4ef6", "\u9886\u53d6"],
+    "\u5546\u57ce\u5217\u8868": ["\u5546\u57ce", "\u5217\u8868"],
+    "\u5546\u57ce\u9886\u53d6": ["\u5546\u57ce", "\u9886\u53d6"],
+    "\u6708\u5361\u67e5\u770b": ["\u6708\u5361", "\u67e5\u770b"],
+    "\u6708\u5361\u9886\u53d6": ["\u6708\u5361", "\u9886\u53d6"],
+    "\u4f1a\u5458\u67e5\u770b": ["\u4f1a\u5458", "\u67e5\u770b"],
+    "\u4f1a\u5458\u9886\u53d6": ["\u4f1a\u5458", "\u9886\u53d6"],
+    "\u5206\u4eab\u67e5\u770b": ["\u5206\u4eab", "\u67e5\u770b"],
+    "\u5206\u4eab\u9886\u53d6": ["\u5206\u4eab", "\u9886\u53d6"],
     "\u670d\u52a1\u72b6\u6001": ["\u670d\u52a1", "\u72b6\u6001"],
     "\u670d\u52a1\u542f\u52a8": ["\u670d\u52a1", "\u542f\u52a8"],
     "\u670d\u52a1\u505c\u6b62": ["\u670d\u52a1", "\u505c\u6b62"],
@@ -91,6 +101,11 @@ class QFarmCommandRouter:
         "friend_help",
         "friend_bad",
         "task",
+        "email",
+        "mall",
+        "monthcard",
+        "vip",
+        "share",
         "sell",
     )
     AUTOMATION_KEYS = set(AUTOMATION_KEY_ORDER)
@@ -118,6 +133,11 @@ class QFarmCommandRouter:
         "重连",
         "种满",
         "全自动",
+        "邮件",
+        "商城",
+        "月卡",
+        "会员",
+        "分享",
     )
 
     def __init__(
@@ -250,6 +270,16 @@ class QFarmCommandRouter:
             return await self._cmd_bag(user_id, args)
         if cmd in {"分析", "analytics", "analysis"}:
             return await self._cmd_analytics(user_id, args)
+        if cmd in {"邮件", "email", "mail"}:
+            return await self._cmd_email(user_id, args)
+        if cmd in {"商城", "mall", "shop"}:
+            return await self._cmd_mall(user_id, args)
+        if cmd in {"月卡", "monthcard", "month_card"}:
+            return await self._cmd_monthcard(user_id, args)
+        if cmd in {"会员", "vip", "qqvip"}:
+            return await self._cmd_vip(user_id, args)
+        if cmd in {"分享", "share"}:
+            return await self._cmd_share(user_id, args)
         if cmd in {"自动化", "automation", "auto"}:
             return await self._cmd_automation(user_id, args)
         if cmd in {"设置", "setting", "settings"}:
@@ -546,6 +576,137 @@ class QFarmCommandRouter:
         if len(rows) > 60:
             lines.append(f"... 共 {len(rows)} 条，仅展示前 60 条。")
         return [RouterReply(text="\n".join(lines))]
+
+    async def _cmd_email(self, user_id: str, args: list[str]) -> list[RouterReply]:
+        if not args:
+            return [RouterReply(text="用法: qfarm 邮件 查看 [1|2|all] | 领取")]
+        sub = self._token(args[0])
+        account_id, _ = await self._require_bound_account(user_id)
+        if sub in {"查看", "view", "list", "列表"}:
+            targets = [1, 2]
+            if len(args) >= 2:
+                raw = self._token(args[1])
+                if raw in {"1", "2"}:
+                    targets = [int(raw)]
+                elif raw not in {"all", "全部"}:
+                    return [RouterReply(text="用法: qfarm 邮件 查看 [1|2|all]")]
+            lines = ["【邮件】"]
+            for box_type in targets:
+                payload = await self.api.get_email_list(account_id, box_type)
+                mails = payload.get("emails", []) if isinstance(payload, dict) else []
+                claimable = [row for row in mails if bool((row or {}).get("hasReward")) and not bool((row or {}).get("claimed"))]
+                lines.append(f"- box={box_type} total={len(mails)} claimable={len(claimable)}")
+                for row in claimable[:20]:
+                    lines.append(f"  - {row.get('id')} {row.get('title') or '-'}")
+                if len(claimable) > 20:
+                    lines.append(f"  ... 共{len(claimable)}封，仅展示20封")
+            return [RouterReply(text="\n".join(lines))]
+        if sub in {"领取", "claim", "run", "一键", "一键领取"}:
+            result = await self.api.run_daily_routine(account_id, "email", force=True)
+            return [RouterReply(text=self._format_daily_routine_result("邮件", result))]
+        return [RouterReply(text="用法: qfarm 邮件 查看 [1|2|all] | 领取")]
+
+    async def _cmd_mall(self, user_id: str, args: list[str]) -> list[RouterReply]:
+        if not args:
+            return [RouterReply(text="用法: qfarm 商城 列表 | 领取 | 购买 <goodsId> [count]")]
+        sub = self._token(args[0])
+        account_id, _ = await self._require_bound_account(user_id)
+        if sub in {"列表", "list", "查看", "view"}:
+            payload = await self.api.get_mall_goods(account_id, 1)
+            goods = payload.get("goods", []) if isinstance(payload, dict) else []
+            lines = [f"【商城】总数: {len(goods)}"]
+            for row in goods[:50]:
+                gid = row.get("goodsId")
+                name = row.get("name") or f"goods-{gid}"
+                free = "free" if row.get("isFree") else "paid"
+                limited = "limited" if row.get("isLimited") else "normal"
+                lines.append(f"- {gid}: {name} [{free}/{limited}]")
+            if len(goods) > 50:
+                lines.append(f"... 共{len(goods)}个，仅展示50个")
+            return [RouterReply(text="\n".join(lines))]
+        if sub in {"领取", "claim", "run"}:
+            result = await self.api.run_daily_routine(account_id, "mall", force=True)
+            return [RouterReply(text=self._format_daily_routine_result("商城", result))]
+        if sub in {"购买", "buy"}:
+            if len(args) < 2 or not str(args[1]).isdigit():
+                return [RouterReply(text="用法: qfarm 商城 购买 <goodsId> [count]")]
+            goods_id = int(args[1])
+            count = 1
+            if len(args) >= 3 and str(args[2]).isdigit():
+                count = max(1, int(args[2]))
+            result = await self.api.purchase_mall_goods(account_id, goods_id, count)
+            bought = result.get("count", count) if isinstance(result, dict) else count
+            return [RouterReply(text=f"商城购买完成: goodsId={goods_id} count={bought}")]
+        return [RouterReply(text="用法: qfarm 商城 列表 | 领取 | 购买 <goodsId> [count]")]
+
+    async def _cmd_monthcard(self, user_id: str, args: list[str]) -> list[RouterReply]:
+        if not args:
+            return [RouterReply(text="用法: qfarm 月卡 查看 | 领取")]
+        sub = self._token(args[0])
+        account_id, _ = await self._require_bound_account(user_id)
+        if sub in {"查看", "view", "list", "列表"}:
+            payload = await self.api.get_monthcard_infos(account_id)
+            infos = payload.get("infos", []) if isinstance(payload, dict) else []
+            lines = [f"【月卡】条目: {len(infos)}"]
+            for row in infos:
+                goods_id = row.get("goodsId")
+                can_claim = bool(row.get("canClaim"))
+                reward = row.get("reward", {})
+                reward_text = f"{reward.get('id', 0)}x{reward.get('count', 0)}" if isinstance(reward, dict) else "-"
+                lines.append(f"- goodsId={goods_id} canClaim={can_claim} reward={reward_text}")
+            return [RouterReply(text="\n".join(lines))]
+        if sub in {"领取", "claim", "run"}:
+            result = await self.api.run_daily_routine(account_id, "monthcard", force=True)
+            return [RouterReply(text=self._format_daily_routine_result("月卡", result))]
+        return [RouterReply(text="用法: qfarm 月卡 查看 | 领取")]
+
+    async def _cmd_vip(self, user_id: str, args: list[str]) -> list[RouterReply]:
+        if not args:
+            return [RouterReply(text="用法: qfarm 会员 查看 | 领取")]
+        sub = self._token(args[0])
+        account_id, _ = await self._require_bound_account(user_id)
+        if sub in {"查看", "view", "status", "状态"}:
+            payload = await self.api.get_vip_daily_status(account_id)
+            return [RouterReply(text=f"【会员】canClaim={bool(payload.get('canClaim'))} hasGift={bool(payload.get('hasGift'))}")]
+        if sub in {"领取", "claim", "run"}:
+            result = await self.api.run_daily_routine(account_id, "vip", force=True)
+            return [RouterReply(text=self._format_daily_routine_result("会员", result))]
+        return [RouterReply(text="用法: qfarm 会员 查看 | 领取")]
+
+    async def _cmd_share(self, user_id: str, args: list[str]) -> list[RouterReply]:
+        if not args:
+            return [RouterReply(text="用法: qfarm 分享 查看 | 领取")]
+        sub = self._token(args[0])
+        account_id, _ = await self._require_bound_account(user_id)
+        if sub in {"查看", "view", "status", "状态"}:
+            payload = await self.api.check_can_share(account_id)
+            return [RouterReply(text=f"【分享】canShare={bool(payload.get('canShare'))}")]
+        if sub in {"领取", "claim", "run"}:
+            result = await self.api.run_daily_routine(account_id, "share", force=True)
+            return [RouterReply(text=self._format_daily_routine_result("分享", result))]
+        return [RouterReply(text="用法: qfarm 分享 查看 | 领取")]
+
+    def _format_daily_routine_result(self, title: str, payload: dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            return f"【{title}】执行完成"
+        lines = [f"【{title}】执行结果"]
+        for key in ("routine", "claimed", "rewardItems", "bought", "error", "pausedNoCoupon", "alreadyClaimed"):
+            if key in payload:
+                lines.append(f"- {key}: {payload.get(key)}")
+        if "freeGifts" in payload:
+            lines.append(f"- freeGifts: {payload.get('freeGifts')}")
+        if "organicFertilizer" in payload:
+            lines.append(f"- organicFertilizer: {payload.get('organicFertilizer')}")
+        state = payload.get("state")
+        if isinstance(state, dict):
+            lines.append(
+                "- state: "
+                f"doneDateKey={state.get('doneDateKey') or '-'} "
+                f"lastCheckAt={state.get('lastCheckAt') or 0} "
+                f"lastClaimAt={state.get('lastClaimAt') or 0} "
+                f"lastResult={state.get('lastResult') or '-'}"
+            )
+        return "\n".join(lines)
 
     async def _cmd_automation(self, user_id: str, args: list[str]) -> list[RouterReply]:
         if not args:
@@ -1103,6 +1264,26 @@ class QFarmCommandRouter:
             if not args:
                 return False
             return args[0] not in {"查看", "view"}
+        if cmd in {"邮件", "email", "mail"}:
+            if not args:
+                return False
+            return args[0] not in {"查看", "view", "list", "列表"}
+        if cmd in {"商城", "mall", "shop"}:
+            if not args:
+                return False
+            return args[0] not in {"查看", "view", "list", "列表"}
+        if cmd in {"月卡", "monthcard", "month_card"}:
+            if not args:
+                return False
+            return args[0] not in {"查看", "view", "list", "列表"}
+        if cmd in {"会员", "vip", "qqvip"}:
+            if not args:
+                return False
+            return args[0] not in {"查看", "view", "status", "状态"}
+        if cmd in {"分享", "share"}:
+            if not args:
+                return False
+            return args[0] not in {"查看", "view", "status", "状态"}
         if cmd in {
             "状态",
             "status",
@@ -1401,7 +1582,7 @@ class QFarmCommandRouter:
     def _format_automation_snapshot(self, automation: dict[str, Any]) -> str:
         if not automation:
             return ""
-        keys = ("farm", "friend", "task", "sell", "farm_push", "land_upgrade")
+        keys = ("farm", "friend", "task", "email", "mall", "monthcard", "vip", "share", "sell", "farm_push", "land_upgrade")
         parts: list[str] = []
         for key in keys:
             if key not in automation:

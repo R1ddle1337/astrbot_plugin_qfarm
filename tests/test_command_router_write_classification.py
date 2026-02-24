@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
@@ -34,16 +34,30 @@ def _build_router(tmp_path: Path) -> QFarmCommandRouter:
 
 def test_shortcuts_are_write_commands(tmp_path: Path):
     router = _build_router(tmp_path)
-    assert router._is_write_command(["登录"]) is True
-    assert router._is_write_command(["退出登录"]) is True
-    assert router._is_write_command(["启动"]) is True
-    assert router._is_write_command(["停止"]) is True
-    assert router._is_write_command(["重连"]) is True
-    assert router._is_write_command(["种满"]) is True
+    assert router._is_write_command(["login"]) is True
+    assert router._is_write_command(["logout"]) is True
+    assert router._is_write_command(["start"]) is True
+    assert router._is_write_command(["stop"]) is True
+    assert router._is_write_command(["reconnect"]) is True
+    assert router._is_write_command(["autoall"]) is True
 
 
 def test_read_commands_still_read_only(tmp_path: Path):
     router = _build_router(tmp_path)
-    assert router._is_write_command(["状态"]) is False
-    assert router._is_write_command(["日志", "50"]) is False
-    assert router._is_write_command(["帮助"]) is False
+    assert router._is_write_command(["status"]) is False
+    assert router._is_write_command(["logs", "50"]) is False
+    assert router._is_write_command(["help"]) is False
+
+
+def test_daily_module_commands_write_classification(tmp_path: Path):
+    router = _build_router(tmp_path)
+    assert router._is_write_command(["email", "view"]) is False
+    assert router._is_write_command(["email", "claim"]) is True
+    assert router._is_write_command(["mall", "list"]) is False
+    assert router._is_write_command(["mall", "buy", "1002"]) is True
+    assert router._is_write_command(["monthcard", "view"]) is False
+    assert router._is_write_command(["monthcard", "claim"]) is True
+    assert router._is_write_command(["vip", "status"]) is False
+    assert router._is_write_command(["vip", "claim"]) is True
+    assert router._is_write_command(["share", "status"]) is False
+    assert router._is_write_command(["share", "claim"]) is True

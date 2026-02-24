@@ -113,6 +113,15 @@ class QFarmApiClient:
     async def claim_share_reward(self, account_id: str | int, claimed: bool = True) -> dict[str, Any]:
         return await self._wrap(self.backend.claim_share_reward(account_id, claimed))
 
+    async def run_daily_routine(self, account_id: str | int, routine: str, force: bool = False) -> dict[str, Any]:
+        return await self._wrap(self.backend.run_daily_routine(account_id, routine, force))
+
+    async def run_daily_routines(self, account_id: str | int, force: bool = False) -> dict[str, Any]:
+        return await self._wrap(self.backend.run_daily_routines(account_id, force))
+
+    async def get_daily_routines(self, account_id: str | int) -> dict[str, Any]:
+        return await self._wrap(self.backend.get_daily_routines(account_id))
+
     async def get_analytics(self, account_id: str | int, sort_by: str) -> list[dict[str, Any]]:
         return await self._wrap(self.backend.get_analytics(account_id, sort_by))
 

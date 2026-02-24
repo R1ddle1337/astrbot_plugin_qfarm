@@ -114,6 +114,46 @@
     "type": "bool",
     "default": true
   },
+  "automation.email": {
+    "description": "默认是否开启邮箱奖励发放",
+    "type": "bool",
+    "default": true
+  },
+  "automation.mall": {
+    "description": "默认是否开启商城免费礼包/有机肥自动任务",
+    "type": "bool",
+    "default": true
+  },
+  "automation.monthcard": {
+    "description": "默认是否开启月卡礼包领取",
+    "type": "bool",
+    "default": true
+  },
+  "automation.vip": {
+    "description": "默认是否开启会员礼包领取",
+    "type": "bool",
+    "default": true
+  },
+  "automation.share": {
+    "description": "默认是否开启分享礼包领取",
+    "type": "bool",
+    "default": true
+  },
+  "push.channel": {
+    "description": "推送通道（预留）",
+    "type": "string",
+    "default": "webhook"
+  },
+  "push.endpoint": {
+    "description": "webhook 推送目标地址（可选）",
+    "type": "string",
+    "default": ""
+  },
+  "push.token": {
+    "description": "推送 token（可选）",
+    "type": "string",
+    "default": ""
+  },
   "enable_image_render": {
     "description": "是否启用文本结果图片渲染",
     "type": "bool",
