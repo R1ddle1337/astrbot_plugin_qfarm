@@ -267,9 +267,31 @@ pip install -r requirements-dev.txt
 - 扫码登录二维码已改为插件本地生成 PNG（缓存目录：插件 data 下 `qr_cache/`）。
 - 纯 Python 主链已移除 `api.qrserver.com` 依赖。
 
+## Release Policy
+
+- 每次准备推送到 GitHub 前，必须先升级版本号并同步以下 3 个位置：
+  - `metadata.yaml` 的 `version: vX.Y.Z`
+  - `main.py` 的 `@register(..., "X.Y.Z", ...)`
+  - `README.md` 的 `Current release: vX.Y.Z`
+- 每次发布记录必须在 `Version` 小节新增一段，至少包含：
+  - `Reason:`
+  - `Change:`
+  - `Impact:`
+  - `Risk:`
+  - `Verification:`
+- 发布前可执行：
+  - `python scripts/check_release_ready.py`
+
 ## Version
 
-- Current release: v2.3.0
+- Current release: v2.3.1
+- 2026-02-24 v2.3.1
+- Reason: enforce mandatory README release logging and pre-push consistency checks for every update.
+- Change: add release policy validator script + tests, and standardize README release entry template.
+- Impact: future releases now fail fast when version numbers or changelog fields are incomplete.
+- Risk: stricter checks may block push if release notes are missing required fields.
+- Verification: `PYTHONPATH=d:\botproject python -m pytest tests -q` passed (`78 passed`).
+- Verification: `python scripts/check_release_ready.py` passed.
 - 2026-02-24 v2.3.0
 - Feat: add phase-1 Python parity service layer for `email/mall/monthcard/vip/share` RPCs.
 - Feat: add new protobuf modules `emailpb/mallpb/qqvippb/sharepb/illustratedpb` (Python gencode 6.31.1).
