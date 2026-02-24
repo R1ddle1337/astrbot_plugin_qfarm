@@ -134,6 +134,15 @@ class QFarmApiClient:
     async def save_settings(self, account_id: str | int, payload: dict[str, Any]) -> dict[str, Any]:
         return await self._wrap(self.backend.save_settings(account_id, payload or {}))
 
+    async def get_push_settings(self, account_id: str | int) -> dict[str, Any]:
+        return await self._wrap(self.backend.get_push_settings(account_id))
+
+    async def save_push_settings(self, account_id: str | int, patch: dict[str, Any]) -> dict[str, Any]:
+        return await self._wrap(self.backend.save_push_settings(account_id, patch or {}))
+
+    async def send_push_test(self, account_id: str | int, title: str = "", content: str = "") -> dict[str, Any]:
+        return await self._wrap(self.backend.send_push_test(account_id, title=title, content=content))
+
     async def set_theme(self, theme: str) -> dict[str, Any]:
         return await self._wrap(self.backend.set_theme(theme))
 

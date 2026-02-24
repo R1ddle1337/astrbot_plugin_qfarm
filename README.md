@@ -12,7 +12,7 @@ AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 协议实现）。
 ## 核心特性
 
 - 双别名入口：`/qfarm` 与 `/农场`
-- 33 条命令全量支持
+- 40 条命令全量支持（含推送管理）
 - 单用户单账号绑定
 - 单账号禁止多用户共享绑定（防串号）
 - 用户白名单 + 群白名单
@@ -97,6 +97,15 @@ pip install -r requirements-dev.txt
 - `qfarm 全自动 开|关` 等价 `qfarm 自动化 全开|全关`
 - `qfarm 种满` 等价 `qfarm 农田 操作 plant`
 
+推送命令（v2.4.1）：
+- `qfarm 推送 查看`
+- `qfarm 推送 设置 开关 <on|off>`
+- `qfarm 推送 设置 通道 <webhook>`
+- `qfarm 推送 设置 地址 <url>`
+- `qfarm 推送 设置 令牌 <token>`
+- `qfarm 推送 测试`
+- `qfarm 推送 清空`
+
 ## 多用户并发策略（新增）
 
 - 一个 qfarm 账号只能归属一个用户，禁止共享绑定。
@@ -179,6 +188,10 @@ pip install -r requirements-dev.txt
 - `rate_limit_write_sec`
 - `global_concurrency`
 - `account_write_serialized`
+- `push.enabled`
+- `push.channel`
+- `push.endpoint`
+- `push.token`
 - `enable_image_render`
 - `render_service_url`
 - `render_timeout_sec`
@@ -300,7 +313,14 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.4.0
+- Current release: v2.4.1
+- 2026-02-24 v2.4.1
+- Reason: deliver phase-3 no-WebUI stability work by adding webhook+token push capability and core-event alert delivery.
+- Change: add `qfarm 推送` command set; add account-level push settings with global defaults; add runtime push delivery (header+body token, retry, structured deliver logs); add daily routine `statusCode` normalization and `daily_summary` structured log.
+- Impact: users can configure/test push in-chat and receive critical runtime alerts without blocking farm/task main flow.
+- Risk: webhook endpoint/network instability may cause repeated push failures; failures are downgraded to logs and do not interrupt core runtime loops.
+- Verification: `PYTHONPATH=d:\botproject python -m pytest tests -q` passed (`106 passed`).
+- Verification: `python scripts/check_release_ready.py` passed.
 - 2026-02-24 v2.4.0
 - Reason: deliver phase-2 no-WebUI parity by adding email/mall/monthcard/vip/share commands and automated daily routines with persisted state.
 - Change: add daily routine runtime pipeline (`email/mall/monthcard/vip/share`), command router entries, automation keys, config schema keys, and related tests.

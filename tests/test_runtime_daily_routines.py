@@ -30,6 +30,7 @@ async def test_daily_routine_state_marks_done_and_persists():
 @pytest.mark.asyncio
 async def test_run_daily_routines_respects_automation_switches():
     runtime = AccountRuntime.__new__(AccountRuntime)
+    logs: list[tuple[tuple[object, ...], dict[str, object]]] = []
     runtime._automation = lambda: {
         "email": True,
         "mall": True,
@@ -37,6 +38,7 @@ async def test_run_daily_routines_respects_automation_switches():
         "monthcard": True,
         "vip": False,
     }
+    runtime._debug_log = lambda *args, **kwargs: logs.append((args, kwargs))
     runtime._run_email_routine = AsyncMock(return_value={"routine": "email_rewards"})
     runtime._run_mall_free_gifts_routine = AsyncMock(return_value={"routine": "mall_free_gifts"})
     runtime._run_mall_organic_routine = AsyncMock(return_value={"routine": "mall_organic_fertilizer"})
@@ -55,3 +57,5 @@ async def test_run_daily_routines_respects_automation_switches():
     assert result["force"] is True
     assert "mallFreeGifts" in result
     assert "monthcard" in result
+    assert result["statusCode"] == "none"
+    assert any(kwargs.get("event") == "daily_summary" for _, kwargs in logs)

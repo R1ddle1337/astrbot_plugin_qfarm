@@ -139,6 +139,11 @@
     "type": "bool",
     "default": true
   },
+  "push.enabled": {
+    "description": "默认是否开启自动推送（按核心告警集触发）",
+    "type": "bool",
+    "default": false
+  },
   "push.channel": {
     "description": "推送通道（预留）",
     "type": "string",

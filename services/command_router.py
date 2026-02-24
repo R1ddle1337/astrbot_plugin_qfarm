@@ -138,6 +138,7 @@ class QFarmCommandRouter:
         "月卡",
         "会员",
         "分享",
+        "推送",
     )
 
     def __init__(
@@ -280,6 +281,8 @@ class QFarmCommandRouter:
             return await self._cmd_vip(user_id, args)
         if cmd in {"分享", "share"}:
             return await self._cmd_share(user_id, args)
+        if cmd in {"推送", "push"}:
+            return await self._cmd_push(user_id, args)
         if cmd in {"自动化", "automation", "auto"}:
             return await self._cmd_automation(user_id, args)
         if cmd in {"设置", "setting", "settings"}:
@@ -686,11 +689,108 @@ class QFarmCommandRouter:
             return [RouterReply(text=self._format_daily_routine_result("分享", result))]
         return [RouterReply(text="用法: qfarm 分享 查看 | 领取")]
 
+    async def _cmd_push(self, user_id: str, args: list[str]) -> list[RouterReply]:
+        if not args:
+            return [
+                RouterReply(
+                    text=(
+                        "用法: qfarm 推送 查看 | 设置 开关 <on|off> | 设置 通道 <webhook> | "
+                        "设置 地址 <url> | 设置 令牌 <token> | 测试 | 清空"
+                    )
+                )
+            ]
+        sub = self._token(args[0])
+        account_id, _ = await self._require_bound_account(user_id)
+
+        if sub in {"查看", "view"}:
+            payload = await self.api.get_push_settings(account_id)
+            push = payload.get("push") if isinstance(payload, dict) else {}
+            settings = push if isinstance(push, dict) else payload
+            if not isinstance(settings, dict):
+                settings = {}
+            channel = str(settings.get("channel") or "").strip() or "-"
+            endpoint = str(settings.get("endpoint") or settings.get("url") or "").strip() or "-"
+            token = self._mask_secret(str(settings.get("token") or ""))
+            lines = [
+                "【推送配置】",
+                f"- 开关: {'on' if bool(settings.get('enabled')) else 'off'}",
+                f"- 通道: {channel}",
+                f"- 地址: {endpoint}",
+                f"- 令牌: {token}",
+            ]
+            return [RouterReply(text="\n".join(lines))]
+
+        if sub in {"设置", "set"}:
+            if len(args) < 3:
+                return [
+                    RouterReply(
+                        text=(
+                            "用法: qfarm 推送 设置 开关 <on|off> | 设置 通道 <webhook> | "
+                            "设置 地址 <url> | 设置 令牌 <token>"
+                        )
+                    )
+                ]
+            key = self._token(args[1])
+            if key in {"开关", "switch"}:
+                enabled = self._parse_bool(args[2])
+                if enabled is None:
+                    return [RouterReply(text="推送开关参数非法，请使用 on/off。")]
+                await self.api.save_push_settings(account_id, {"enabled": enabled})
+                return [RouterReply(text=f"推送开关已更新: {'on' if enabled else 'off'}")]
+            if key in {"通道", "channel"}:
+                channel = self._token(args[2])
+                if channel != "webhook":
+                    return [RouterReply(text="推送通道参数非法，仅支持 webhook。")]
+                await self.api.save_push_settings(account_id, {"channel": channel})
+                return [RouterReply(text="推送通道已更新: webhook")]
+            if key in {"地址", "url"}:
+                endpoint = " ".join(args[2:]).strip()
+                if not endpoint:
+                    return [RouterReply(text="推送地址不能为空。")]
+                await self.api.save_push_settings(account_id, {"endpoint": endpoint})
+                return [RouterReply(text=f"推送地址已更新: {endpoint}")]
+            if key in {"令牌", "token"}:
+                token = " ".join(args[2:]).strip()
+                if not token:
+                    return [RouterReply(text="推送令牌不能为空。")]
+                await self.api.save_push_settings(account_id, {"token": token})
+                return [RouterReply(text=f"推送令牌已更新: {self._mask_secret(token)}")]
+            return [RouterReply(text="推送设置参数非法。")]
+
+        if sub in {"测试", "test"}:
+            result = await self.api.send_push_test(account_id, title="", content="")
+            if isinstance(result, dict):
+                raw_ok = result.get("ok")
+                if raw_ok is None:
+                    raw_ok = result.get("success")
+                ok = True if raw_ok is None else bool(raw_ok)
+                message = str(result.get("message") or result.get("msg") or "").strip()
+                if ok:
+                    return [RouterReply(text="推送测试已发送。" if not message else f"推送测试已发送: {message}")]
+                return [RouterReply(text="推送测试失败。" if not message else f"推送测试失败: {message}")]
+            return [RouterReply(text="推送测试已发送。")]
+
+        if sub in {"清空", "clear"}:
+            await self.api.save_push_settings(
+                account_id,
+                {"enabled": False, "endpoint": "", "token": ""},
+            )
+            return [RouterReply(text="推送配置已清空。")]
+
+        return [
+            RouterReply(
+                text=(
+                    "用法: qfarm 推送 查看 | 设置 开关 <on|off> | 设置 通道 <webhook> | "
+                    "设置 地址 <url> | 设置 令牌 <token> | 测试 | 清空"
+                )
+            )
+        ]
+
     def _format_daily_routine_result(self, title: str, payload: dict[str, Any]) -> str:
         if not isinstance(payload, dict):
             return f"【{title}】执行完成"
         lines = [f"【{title}】执行结果"]
-        for key in ("routine", "claimed", "rewardItems", "bought", "error", "pausedNoCoupon", "alreadyClaimed"):
+        for key in ("routine", "statusCode", "claimed", "rewardItems", "bought", "error", "pausedNoCoupon", "alreadyClaimed"):
             if key in payload:
                 lines.append(f"- {key}: {payload.get(key)}")
         if "freeGifts" in payload:
@@ -990,9 +1090,16 @@ class QFarmCommandRouter:
             "28) qfarm 主题 <dark|light>\n"
             "29) qfarm 日志 [limit] [module=...] [event=...] [keyword=...] [isWarn=0|1]\n"
             "30) qfarm 账号日志 [limit]\n"
-            "31) qfarm 调试 出售 (超管)\n"
-            "32) qfarm 白名单 用户 列表|添加|删除 <uid> (超管)\n"
-            "33) qfarm 白名单 群 列表|添加|删除 <gid> (超管)\n"
+            "31) qfarm 推送 查看\n"
+            "32) qfarm 推送 设置 开关 <on|off>\n"
+            "33) qfarm 推送 设置 通道 <webhook>\n"
+            "34) qfarm 推送 设置 地址 <url>\n"
+            "35) qfarm 推送 设置 令牌 <token>\n"
+            "36) qfarm 推送 测试\n"
+            "37) qfarm 推送 清空\n"
+            "38) qfarm 调试 出售 (超管)\n"
+            "39) qfarm 白名单 用户 列表|添加|删除 <uid> (超管)\n"
+            "40) qfarm 白名单 群 列表|添加|删除 <gid> (超管)\n"
             "\n同样支持中文别名命令: 农场 ..."
             "\n快捷命令: qfarm 登录 | qfarm 退出登录 | qfarm 启动 | qfarm 停止 | qfarm 全自动 [开|关]"
             "\n快速播种: qfarm 种满"
@@ -1284,6 +1391,12 @@ class QFarmCommandRouter:
             if not args:
                 return False
             return args[0] not in {"查看", "view", "status", "状态"}
+        if cmd in {"推送", "push"}:
+            if not args:
+                return False
+            if args[0] in {"查看", "view"}:
+                return False
+            return args[0] in {"设置", "set", "测试", "test", "清空", "clear"}
         if cmd in {
             "状态",
             "status",
@@ -1312,6 +1425,16 @@ class QFarmCommandRouter:
         if cmd in {"全自动", "一键自动化", "autoall"}:
             return True
         return False
+
+    def _mask_secret(self, value: str) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "-"
+        if len(text) <= 2:
+            return "*" * len(text)
+        if len(text) <= 6:
+            return text[0] + ("*" * (len(text) - 2)) + text[-1]
+        return f"{text[:2]}***{text[-2:]}"
 
     def _mark_render_candidates(self, replies: list[RouterReply]) -> list[RouterReply]:
         for reply in replies:

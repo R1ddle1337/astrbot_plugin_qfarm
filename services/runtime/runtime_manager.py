@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import aiohttp
+
 from ..domain.analytics_service import AnalyticsService
 from ..domain.config_data import GameConfigData
 from ..protocol import GatewaySessionConfig
@@ -55,7 +57,32 @@ DEFAULT_ACCOUNT_CONFIG = {
         "end": "07:00",
     },
     "dailyRoutines": {},
+    "push": {
+        "enabled": False,
+        "channel": "webhook",
+        "endpoint": "",
+        "token": "",
+        "autoEvents": "core",
+        "retryMax": 2,
+    },
 }
+
+CORE_PUSH_TASK_ERROR_EVENTS = {
+    "email_rewards",
+    "mall_free_gifts",
+    "mall_organic_fertilizer",
+    "month_card_gift",
+    "vip_daily_gift",
+    "daily_share",
+}
+CORE_PUSH_SYSTEM_EVENTS = {"account_start_failed", "start_failed", "kickout_delete"}
+
+
+class PushDeliverError(RuntimeError):
+    def __init__(self, message: str, *, http_status: int = 0, error_code: str = "") -> None:
+        super().__init__(message)
+        self.http_status = max(0, int(http_status))
+        self.error_code = str(error_code or "")
 
 
 class QFarmRuntimeManager:
@@ -78,6 +105,7 @@ class QFarmRuntimeManager:
         runtime_log_flush_interval_sec: float = 2.0,
         runtime_log_flush_batch: int = 80,
         default_automation: dict[str, Any] | None = None,
+        default_push: dict[str, Any] | None = None,
         logger: Any | None = None,
     ) -> None:
         self.plugin_root = Path(plugin_root)
@@ -114,6 +142,27 @@ class QFarmRuntimeManager:
                 base_auto[key] = mode if mode in {"both", "normal", "organic", "none"} else "both"
                 continue
             base_auto[key] = bool(value)
+        incoming_push = default_push if isinstance(default_push, dict) else {}
+        base_push = self._default_account_config.setdefault("push", {})
+        for key, value in incoming_push.items():
+            if key == "enabled":
+                base_push["enabled"] = bool(value)
+                continue
+            if key == "channel":
+                channel = str(value or "webhook").strip().lower()
+                base_push["channel"] = channel if channel in {"webhook"} else "webhook"
+                continue
+            if key in {"endpoint", "url"}:
+                base_push["endpoint"] = str(value or "").strip()
+                continue
+            if key == "token":
+                base_push["token"] = str(value or "").strip()
+                continue
+            if key == "autoEvents":
+                base_push["autoEvents"] = "core"
+                continue
+            if key == "retryMax":
+                base_push["retryMax"] = max(0, min(5, _to_int(value, 2)))
         self.config_data = GameConfigData(self.plugin_root)
         self.analytics = AnalyticsService(self.config_data)
         self.qr_login = QFarmQRLogin()
@@ -285,6 +334,7 @@ class QFarmRuntimeManager:
                 is_warn=True,
                 module="system",
                 event="account_start_failed",
+                result="error",
                 accountId=account_id_text,
             )
             self._add_account_log(
@@ -397,6 +447,16 @@ class QFarmRuntimeManager:
                         startRetryCount=attempt,
                     )
                     if not can_retry:
+                        self._log(
+                            "system",
+                            f"account start failed permanently: {last_error}",
+                            is_warn=True,
+                            module="system",
+                            event="start_failed",
+                            result="error",
+                            accountId=account_id_text,
+                            retry=attempt,
+                        )
                         raise RuntimeError(
                             f"账号启动失败(重试{attempt}/{attempts}): {last_error}"
                         )
@@ -546,6 +606,51 @@ class QFarmRuntimeManager:
         payload = {"automation": {str(key): value}}
         return await self.save_settings(account_id, payload)
 
+    async def get_push_settings(self, account_id: str | int) -> dict[str, Any]:
+        account_id_text = str(account_id or "").strip()
+        cfg = self._get_account_settings(account_id_text)
+        return {"push": dict(cfg.get("push", {}))}
+
+    async def save_push_settings(self, account_id: str | int, patch: dict[str, Any]) -> dict[str, Any]:
+        account_id_text = str(account_id or "").strip()
+        if not account_id_text:
+            raise RuntimeError("account_id 不能为空")
+        payload = patch if isinstance(patch, dict) else {}
+        return await self.save_settings(account_id_text, {"push": payload})
+
+    async def send_push_test(
+        self,
+        account_id: str | int,
+        title: str = "",
+        content: str = "",
+    ) -> dict[str, Any]:
+        account_id_text = str(account_id or "").strip()
+        cfg = self._get_account_settings(account_id_text)
+        push_cfg = self._normalize_push_settings(cfg.get("push", {}))
+        test_title = str(title or "").strip() or "QFarm Push"
+        test_content = str(content or "").strip() or "manual push test"
+        try:
+            result = await self._send_push_with_retry(
+                account_id=account_id_text,
+                push_cfg=push_cfg,
+                title=test_title,
+                content=test_content,
+                context={
+                    "reason": "manual_test",
+                    "module": "push",
+                    "event": "manual_test",
+                    "result": "test",
+                },
+            )
+            return {
+                "ok": bool(result.get("ok")),
+                "message": str(result.get("message") or "ok"),
+                "attempt": _to_int(result.get("attempt"), 1),
+                "httpStatus": _to_int(result.get("httpStatus"), 0),
+            }
+        except Exception as e:
+            return {"ok": False, "message": str(e), "attempt": 0, "httpStatus": 0}
+
     async def save_settings(self, account_id: str | int, payload: dict[str, Any]) -> dict[str, Any]:
         account_id_text = str(account_id or "").strip()
         if not account_id_text:
@@ -587,6 +692,7 @@ class QFarmRuntimeManager:
             "friendQuietHours": cfg.get("friendQuietHours", {}),
             "automation": cfg.get("automation", {}),
             "dailyRoutines": cfg.get("dailyRoutines", {}),
+            "push": cfg.get("push", {}),
             "ui": self._settings.get("ui", {"theme": "dark"}),
         }
 
@@ -697,6 +803,23 @@ class QFarmRuntimeManager:
             result.setdefault("friendQuietHours", {}).update(src.get("friendQuietHours"))
         if isinstance(src.get("dailyRoutines"), dict):
             result["dailyRoutines"] = self._merge_daily_routines(result.get("dailyRoutines"), src.get("dailyRoutines"))
+        if isinstance(src.get("push"), dict):
+            merged_push = result.setdefault("push", {})
+            for key, value in src.get("push", {}).items():
+                if key == "enabled":
+                    merged_push["enabled"] = bool(value)
+                elif key == "channel":
+                    channel = str(value or "webhook").strip().lower()
+                    merged_push["channel"] = channel if channel in {"webhook"} else "webhook"
+                elif key in {"endpoint", "url"}:
+                    merged_push["endpoint"] = str(value or "").strip()
+                elif key == "token":
+                    merged_push["token"] = str(value or "").strip()
+                elif key == "autoEvents":
+                    merged_push["autoEvents"] = "core"
+                elif key == "retryMax":
+                    merged_push["retryMax"] = max(0, min(5, _to_int(value, 2)))
+            result["push"] = self._normalize_push_settings(merged_push)
         return result
 
     @staticmethod
@@ -723,6 +846,224 @@ class QFarmRuntimeManager:
                 if "lastError" in value:
                     current["lastError"] = str(value.get("lastError") or "")
         return result
+
+    @staticmethod
+    def _normalize_push_settings(raw: Any) -> dict[str, Any]:
+        base = dict((DEFAULT_ACCOUNT_CONFIG.get("push") or {}))
+        data = raw if isinstance(raw, dict) else {}
+        if "enabled" in data:
+            base["enabled"] = bool(data.get("enabled"))
+        channel = str(data.get("channel", base.get("channel", "webhook")) or "webhook").strip().lower()
+        base["channel"] = channel if channel in {"webhook"} else "webhook"
+        endpoint = data.get("endpoint", data.get("url", base.get("endpoint", "")))
+        base["endpoint"] = str(endpoint or "").strip()
+        base["token"] = str(data.get("token", base.get("token", "")) or "").strip()
+        base["autoEvents"] = "core"
+        base["retryMax"] = max(0, min(5, _to_int(data.get("retryMax", base.get("retryMax", 2)), 2)))
+        return base
+
+    @staticmethod
+    def _extract_entry_account_id(entry: dict[str, Any]) -> str:
+        account_id = str(entry.get("accountId") or "").strip()
+        meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        if not account_id:
+            account_id = str(meta.get("accountId") or "").strip()
+        return account_id
+
+    def _should_auto_push_entry(self, entry: dict[str, Any]) -> bool:
+        meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        module = str(meta.get("module") or "").strip()
+        event = str(meta.get("event") or "").strip()
+        result = str(meta.get("result") or "").strip().lower()
+        if module == "push":
+            return False
+        if not event:
+            return False
+        if module == "task":
+            if event == "daily_summary":
+                return True
+            return event in CORE_PUSH_TASK_ERROR_EVENTS and result == "error"
+        if module == "system":
+            return event in CORE_PUSH_SYSTEM_EVENTS
+        return False
+
+    def _build_push_title_content(self, entry: dict[str, Any]) -> tuple[str, str]:
+        meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        module = str(meta.get("module") or "").strip() or "system"
+        event = str(meta.get("event") or "").strip() or "unknown"
+        result = str(meta.get("result") or "").strip() or "-"
+        account_id = self._extract_entry_account_id(entry) or "-"
+        time_text = str(entry.get("time") or "")
+        msg = str(entry.get("msg") or "")
+        title = f"QFarm {module}/{event}"
+        content = f"[{time_text}] account={account_id} result={result}\n{msg}"
+        return title, content
+
+    def _schedule_auto_push(self, entry: dict[str, Any]) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        try:
+            loop.create_task(self._deliver_auto_push(entry))
+        except Exception:
+            return
+
+    async def _deliver_auto_push(self, entry: dict[str, Any]) -> None:
+        account_id = self._extract_entry_account_id(entry)
+        if not account_id:
+            return
+        cfg = self._get_account_settings(account_id)
+        push_cfg = self._normalize_push_settings(cfg.get("push", {}))
+        if not bool(push_cfg.get("enabled", False)):
+            return
+        if str(push_cfg.get("autoEvents") or "core").strip().lower() != "core":
+            return
+        title, content = self._build_push_title_content(entry)
+        meta = entry.get("meta") if isinstance(entry.get("meta"), dict) else {}
+        context = {
+            "reason": "auto_event",
+            "module": str(meta.get("module") or ""),
+            "event": str(meta.get("event") or ""),
+            "result": str(meta.get("result") or ""),
+            "time": str(entry.get("time") or ""),
+        }
+        try:
+            await self._send_push_with_retry(
+                account_id=account_id,
+                push_cfg=push_cfg,
+                title=title,
+                content=content,
+                context=context,
+            )
+        except Exception:
+            return
+
+    async def _send_push_with_retry(
+        self,
+        *,
+        account_id: str,
+        push_cfg: dict[str, Any],
+        title: str,
+        content: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        cfg = self._normalize_push_settings(push_cfg)
+        retry_max = max(0, min(5, _to_int(cfg.get("retryMax"), 2)))
+        last_error: Exception | None = None
+        for idx in range(retry_max + 1):
+            attempt = idx + 1
+            try:
+                result = await self._send_push_once(
+                    account_id=account_id,
+                    push_cfg=cfg,
+                    title=title,
+                    content=content,
+                    context=context,
+                )
+                self._on_runtime_log(
+                    account_id,
+                    "push",
+                    f"push delivered: {result.get('message') or 'ok'}",
+                    False,
+                    {
+                        "module": "push",
+                        "event": "deliver",
+                        "result": "ok",
+                        "attempt": attempt,
+                        "channel": str(cfg.get("channel") or "webhook"),
+                        "accountId": account_id,
+                        "httpStatus": _to_int(result.get("httpStatus"), 0),
+                        "errorCode": "",
+                        "reason": str(context.get("reason") or ""),
+                    },
+                )
+                return {
+                    "ok": True,
+                    "attempt": attempt,
+                    "httpStatus": _to_int(result.get("httpStatus"), 0),
+                    "message": str(result.get("message") or "ok"),
+                }
+            except Exception as e:
+                last_error = e
+                if isinstance(e, PushDeliverError):
+                    http_status = e.http_status
+                    error_code = e.error_code or "deliver_error"
+                    err_msg = str(e)
+                else:
+                    http_status = 0
+                    error_code = type(e).__name__
+                    err_msg = str(e)
+                self._on_runtime_log(
+                    account_id,
+                    "push",
+                    f"push deliver failed: {err_msg}",
+                    True,
+                    {
+                        "module": "push",
+                        "event": "deliver",
+                        "result": "error",
+                        "attempt": attempt,
+                        "channel": str(cfg.get("channel") or "webhook"),
+                        "accountId": account_id,
+                        "httpStatus": http_status,
+                        "errorCode": error_code,
+                        "reason": str(context.get("reason") or ""),
+                    },
+                )
+                if idx >= retry_max:
+                    break
+                delay = min(4.0, 0.5 * (2 ** idx))
+                await asyncio.sleep(delay)
+        raise RuntimeError(str(last_error) if last_error else "push deliver failed")
+
+    async def _send_push_once(
+        self,
+        *,
+        account_id: str,
+        push_cfg: dict[str, Any],
+        title: str,
+        content: str,
+        context: dict[str, Any],
+    ) -> dict[str, Any]:
+        cfg = self._normalize_push_settings(push_cfg)
+        channel = str(cfg.get("channel") or "webhook").strip().lower()
+        if channel != "webhook":
+            raise PushDeliverError(f"unsupported push channel: {channel}", error_code="channel_unsupported")
+        endpoint = str(cfg.get("endpoint") or "").strip()
+        if not endpoint:
+            raise PushDeliverError("push endpoint is empty", error_code="endpoint_empty")
+        token = str(cfg.get("token") or "").strip()
+        headers = {"Content-Type": "application/json"}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        body = {
+            "title": str(title or "QFarm Push"),
+            "content": str(content or ""),
+            "token": token,
+            "accountId": str(account_id or ""),
+            "module": str(context.get("module") or ""),
+            "event": str(context.get("event") or ""),
+            "result": str(context.get("result") or ""),
+            "time": str(context.get("time") or time.strftime("%Y-%m-%d %H:%M:%S", time.localtime())),
+        }
+        timeout = aiohttp.ClientTimeout(total=10)
+        try:
+            async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with session.post(endpoint, json=body, headers=headers) as response:
+                    text = (await response.text()).strip()
+                    if response.status < 200 or response.status >= 300:
+                        snippet = text[:200] if text else "no_response_body"
+                        raise PushDeliverError(
+                            f"push webhook http {response.status}: {snippet}",
+                            http_status=response.status,
+                            error_code=f"http_{response.status}",
+                        )
+                    return {"httpStatus": int(response.status), "message": text[:200] or "ok"}
+        except asyncio.TimeoutError as e:
+            raise PushDeliverError("push request timeout", error_code="timeout") from e
+        except aiohttp.ClientError as e:
+            raise PushDeliverError(f"push request error: {e}", error_code="request_error") from e
 
     def _normalize_accounts_data(self, raw: dict[str, Any]) -> dict[str, Any]:
         data = dict(raw or {})
@@ -845,9 +1186,27 @@ class QFarmRuntimeManager:
         if len(self._global_logs) > self.runtime_log_max_entries:
             self._global_logs = self._global_logs[-self.runtime_log_max_entries :]
         self._schedule_runtime_logs_persist()
+        try:
+            if self._should_auto_push_entry(entry):
+                self._schedule_auto_push(entry)
+        except Exception:
+            return
 
     async def _on_runtime_kicked(self, account_id: str, reason: str) -> None:
         self._add_account_log("kickout_delete", f"账号被踢下线，已删除: {reason}", account_id, "", reason=reason)
+        self._on_runtime_log(
+            str(account_id or ""),
+            "system",
+            f"account kicked and removed: {reason}",
+            True,
+            {
+                "module": "system",
+                "event": "kickout_delete",
+                "result": "error",
+                "reason": str(reason or ""),
+                "accountId": str(account_id or ""),
+            },
+        )
         try:
             await self.delete_account(account_id)
         except Exception:

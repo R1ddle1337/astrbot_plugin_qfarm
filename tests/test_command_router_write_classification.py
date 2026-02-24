@@ -61,3 +61,13 @@ def test_daily_module_commands_write_classification(tmp_path: Path):
     assert router._is_write_command(["vip", "claim"]) is True
     assert router._is_write_command(["share", "status"]) is False
     assert router._is_write_command(["share", "claim"]) is True
+
+
+def test_push_commands_write_classification(tmp_path: Path):
+    router = _build_router(tmp_path)
+    assert router._is_write_command(["push", "view"]) is False
+    assert router._is_write_command(["推送", "查看"]) is False
+    assert router._is_write_command(["push", "set", "switch", "on"]) is True
+    assert router._is_write_command(["推送", "设置", "开关", "off"]) is True
+    assert router._is_write_command(["push", "test"]) is True
+    assert router._is_write_command(["推送", "清空"]) is True

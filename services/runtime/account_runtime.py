@@ -378,17 +378,22 @@ class AccountRuntime:
     async def run_daily_routine(self, routine: str, force: bool = False) -> dict[str, Any]:
         token = str(routine or "").strip().lower()
         if token in {"email", "mail"}:
-            return await self._run_email_routine(force=bool(force))
+            return self._with_status_code(await self._run_email_routine(force=bool(force)))
         if token in {"mall", "shop"}:
-            free = await self._run_mall_free_gifts_routine(force=bool(force))
-            organic = await self._run_mall_organic_routine(force=bool(force))
-            return {"routine": "mall", "freeGifts": free, "organicFertilizer": organic}
+            free = self._with_status_code(await self._run_mall_free_gifts_routine(force=bool(force)))
+            organic = self._with_status_code(await self._run_mall_organic_routine(force=bool(force)))
+            return {
+                "routine": "mall",
+                "statusCode": self._merge_status_codes([free.get("statusCode"), organic.get("statusCode")]),
+                "freeGifts": free,
+                "organicFertilizer": organic,
+            }
         if token in {"monthcard", "month_card"}:
-            return await self._run_monthcard_routine(force=bool(force))
+            return self._with_status_code(await self._run_monthcard_routine(force=bool(force)))
         if token in {"vip", "qqvip"}:
-            return await self._run_vip_routine(force=bool(force))
+            return self._with_status_code(await self._run_vip_routine(force=bool(force)))
         if token in {"share"}:
-            return await self._run_share_routine(force=bool(force))
+            return self._with_status_code(await self._run_share_routine(force=bool(force)))
         if token in {"all", "*"}:
             return await self.run_daily_routines(force=bool(force))
         raise RuntimeError(f"unsupported daily routine: {routine}")
@@ -397,17 +402,79 @@ class AccountRuntime:
         auto = self._automation()
         result: dict[str, Any] = {"force": bool(force)}
         if auto.get("email", True):
-            result["email"] = await self._run_email_routine(force=bool(force))
+            result["email"] = self._with_status_code(await self._run_email_routine(force=bool(force)))
         if auto.get("mall", True):
-            result["mallFreeGifts"] = await self._run_mall_free_gifts_routine(force=bool(force))
-            result["mallOrganicFertilizer"] = await self._run_mall_organic_routine(force=bool(force))
+            result["mallFreeGifts"] = self._with_status_code(await self._run_mall_free_gifts_routine(force=bool(force)))
+            result["mallOrganicFertilizer"] = self._with_status_code(await self._run_mall_organic_routine(force=bool(force)))
         if auto.get("share", True):
-            result["share"] = await self._run_share_routine(force=bool(force))
+            result["share"] = self._with_status_code(await self._run_share_routine(force=bool(force)))
         if auto.get("monthcard", True):
-            result["monthcard"] = await self._run_monthcard_routine(force=bool(force))
+            result["monthcard"] = self._with_status_code(await self._run_monthcard_routine(force=bool(force)))
         if auto.get("vip", True):
-            result["vip"] = await self._run_vip_routine(force=bool(force))
+            result["vip"] = self._with_status_code(await self._run_vip_routine(force=bool(force)))
+        summary: dict[str, str] = {}
+        for key, value in result.items():
+            if key == "force" or not isinstance(value, dict):
+                continue
+            summary[key] = str(value.get("statusCode") or "none")
+        overall = self._merge_status_codes(summary.values())
+        result["statusCode"] = overall
+        self._debug_log(
+            "daily",
+            f"daily summary: {summary}",
+            module="task",
+            event="daily_summary",
+            result=overall,
+            summary=summary,
+            force=bool(force),
+        )
         return result
+
+    def _with_status_code(self, payload: dict[str, Any]) -> dict[str, Any]:
+        row = dict(payload or {})
+        status_code = str(row.get("statusCode") or "").strip().lower()
+        if status_code not in {"ok", "none", "error", "already_claimed", "no_coupon", "skipped"}:
+            status_code = self._infer_status_code(row)
+        row["statusCode"] = status_code
+        return row
+
+    @staticmethod
+    def _infer_status_code(payload: dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            return "error"
+        if bool(payload.get("skipped")):
+            return "skipped"
+        if str(payload.get("error") or "").strip():
+            return "error"
+        if bool(payload.get("alreadyClaimed")):
+            return "already_claimed"
+        if bool(payload.get("pausedNoCoupon")):
+            return "no_coupon"
+        claimed = payload.get("claimed")
+        if isinstance(claimed, bool) and claimed:
+            return "ok"
+        if not isinstance(claimed, bool) and _to_int(claimed, 0) > 0:
+            return "ok"
+        if _to_int(payload.get("bought"), 0) > 0 or _to_int(payload.get("rewardItems"), 0) > 0:
+            return "ok"
+        return "none"
+
+    @staticmethod
+    def _merge_status_codes(codes: Any) -> str:
+        values = [str(item or "").strip().lower() for item in list(codes or []) if str(item or "").strip()]
+        if not values:
+            return "none"
+        if "error" in values:
+            return "error"
+        if "ok" in values:
+            return "ok"
+        if "no_coupon" in values:
+            return "no_coupon"
+        if "already_claimed" in values:
+            return "already_claimed"
+        if all(item == "skipped" for item in values):
+            return "skipped"
+        return "none"
 
     async def get_daily_routines_state(self) -> dict[str, Any]:
         return self._daily_routines_snapshot()

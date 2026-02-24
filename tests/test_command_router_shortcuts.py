@@ -87,3 +87,13 @@ async def test_dispatch_autoall_off_maps_to_automation_all_off(tmp_path: Path):
     await router._dispatch(event=object(), user_id="u1", tokens=["全自动", "关"])
 
     router._cmd_automation.assert_awaited_once_with("u1", ["全关"])
+
+
+@pytest.mark.asyncio
+async def test_dispatch_push_maps_to_push_command(tmp_path: Path):
+    router = _build_router(tmp_path)
+    router._cmd_push = AsyncMock(return_value=[RouterReply(text="ok")])  # type: ignore[method-assign]
+
+    await router._dispatch(event=object(), user_id="u1", tokens=["push", "view"])
+
+    router._cmd_push.assert_awaited_once_with("u1", ["view"])
