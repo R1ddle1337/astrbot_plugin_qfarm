@@ -463,6 +463,50 @@ class QFarmRuntimeManager:
     async def do_farm_op(self, account_id: str | int, op_type: str) -> dict[str, Any]:
         return await self._require_runtime(account_id).do_farm_operation(op_type)
 
+    async def get_email_list(self, account_id: str | int, box_type: int = 1) -> dict[str, Any]:
+        return await self._require_runtime(account_id).get_email_list(_to_int(box_type, 1))
+
+    async def claim_email(
+        self,
+        account_id: str | int,
+        box_type: int = 1,
+        email_id: str = "",
+        *,
+        batch: bool = False,
+    ) -> dict[str, Any]:
+        return await self._require_runtime(account_id).claim_email(
+            _to_int(box_type, 1),
+            str(email_id or ""),
+            batch=bool(batch),
+        )
+
+    async def get_mall_goods(self, account_id: str | int, slot_type: int = 1) -> dict[str, Any]:
+        return await self._require_runtime(account_id).get_mall_goods(_to_int(slot_type, 1))
+
+    async def purchase_mall_goods(self, account_id: str | int, goods_id: int, count: int = 1) -> dict[str, Any]:
+        return await self._require_runtime(account_id).purchase_mall_goods(_to_int(goods_id, 0), _to_int(count, 1))
+
+    async def get_monthcard_infos(self, account_id: str | int) -> dict[str, Any]:
+        return await self._require_runtime(account_id).get_monthcard_infos()
+
+    async def claim_monthcard_reward(self, account_id: str | int, goods_id: int) -> dict[str, Any]:
+        return await self._require_runtime(account_id).claim_monthcard_reward(_to_int(goods_id, 0))
+
+    async def get_vip_daily_status(self, account_id: str | int) -> dict[str, Any]:
+        return await self._require_runtime(account_id).get_vip_daily_status()
+
+    async def claim_vip_daily_gift(self, account_id: str | int) -> dict[str, Any]:
+        return await self._require_runtime(account_id).claim_vip_daily_gift()
+
+    async def check_can_share(self, account_id: str | int) -> dict[str, Any]:
+        return await self._require_runtime(account_id).check_can_share()
+
+    async def report_share(self, account_id: str | int, shared: bool = True) -> dict[str, Any]:
+        return await self._require_runtime(account_id).report_share(bool(shared))
+
+    async def claim_share_reward(self, account_id: str | int, claimed: bool = True) -> dict[str, Any]:
+        return await self._require_runtime(account_id).claim_share_reward(bool(claimed))
+
     async def get_analytics(self, account_id: str | int, sort_by: str) -> list[dict[str, Any]]:
         runtime = self._runtimes.get(str(account_id))
         if runtime:

@@ -269,7 +269,11 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.2.7
+- Current release: v2.3.0
+- 2026-02-24 v2.3.0
+- Feat: add phase-1 Python parity service layer for `email/mall/monthcard/vip/share` RPCs.
+- Feat: add new protobuf modules `emailpb/mallpb/qqvippb/sharepb/illustratedpb` (Python gencode 6.31.1).
+- Test: add domain-level RPC encode/decode tests for extended services.
 - 2026-02-24 v2.2.7
 - Fix: pin protobuf runtime to `>=6.31.1,<7` to match checked-in pb2 gencode and avoid plugin import `VersionError`.
 - Chore: sync `qqfarm文档/` baseline (including new proto/module references) for upcoming Python parity work.

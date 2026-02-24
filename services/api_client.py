@@ -66,6 +66,53 @@ class QFarmApiClient:
     async def do_farm_operation(self, account_id: str | int, op_type: str) -> dict[str, Any]:
         return await self._wrap(self.backend.do_farm_op(account_id, op_type))
 
+    async def get_email_list(self, account_id: str | int, box_type: int = 1) -> dict[str, Any]:
+        return await self._wrap(self.backend.get_email_list(account_id, box_type))
+
+    async def claim_email(
+        self,
+        account_id: str | int,
+        box_type: int = 1,
+        email_id: str = "",
+        *,
+        batch: bool = False,
+    ) -> dict[str, Any]:
+        return await self._wrap(
+            self.backend.claim_email(
+                account_id,
+                box_type,
+                email_id,
+                batch=batch,
+            )
+        )
+
+    async def get_mall_goods(self, account_id: str | int, slot_type: int = 1) -> dict[str, Any]:
+        return await self._wrap(self.backend.get_mall_goods(account_id, slot_type))
+
+    async def purchase_mall_goods(self, account_id: str | int, goods_id: int, count: int = 1) -> dict[str, Any]:
+        return await self._wrap(self.backend.purchase_mall_goods(account_id, goods_id, count))
+
+    async def get_monthcard_infos(self, account_id: str | int) -> dict[str, Any]:
+        return await self._wrap(self.backend.get_monthcard_infos(account_id))
+
+    async def claim_monthcard_reward(self, account_id: str | int, goods_id: int) -> dict[str, Any]:
+        return await self._wrap(self.backend.claim_monthcard_reward(account_id, goods_id))
+
+    async def get_vip_daily_status(self, account_id: str | int) -> dict[str, Any]:
+        return await self._wrap(self.backend.get_vip_daily_status(account_id))
+
+    async def claim_vip_daily_gift(self, account_id: str | int) -> dict[str, Any]:
+        return await self._wrap(self.backend.claim_vip_daily_gift(account_id))
+
+    async def check_can_share(self, account_id: str | int) -> dict[str, Any]:
+        return await self._wrap(self.backend.check_can_share(account_id))
+
+    async def report_share(self, account_id: str | int, shared: bool = True) -> dict[str, Any]:
+        return await self._wrap(self.backend.report_share(account_id, shared))
+
+    async def claim_share_reward(self, account_id: str | int, claimed: bool = True) -> dict[str, Any]:
+        return await self._wrap(self.backend.claim_share_reward(account_id, claimed))
+
     async def get_analytics(self, account_id: str | int, sort_by: str) -> list[dict[str, Any]]:
         return await self._wrap(self.backend.get_analytics(account_id, sort_by))
 

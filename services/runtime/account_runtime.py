@@ -7,11 +7,16 @@ from typing import Any
 
 from ..domain.analytics_service import AnalyticsService
 from ..domain.config_data import GameConfigData
+from ..domain.email_service import EmailService
 from ..domain.farm_service import FarmService
 from ..domain.friend_service import FriendService
 from ..domain.invite_service import InviteService
+from ..domain.mall_service import MallService
+from ..domain.monthcard_service import MonthCardService
+from ..domain.share_service import ShareService
 from ..domain.task_service import TaskService
 from ..domain.user_service import UserService
+from ..domain.vip_service import VipService
 from ..domain.warehouse_service import WarehouseService
 from ..protocol import GatewaySession, GatewaySessionConfig
 from ..protocol.proto import friendpb_pb2, game_pb2, notifypb_pb2, plantpb_pb2, taskpb_pb2, userpb_pb2
@@ -69,6 +74,11 @@ class AccountRuntime:
         self.task = TaskService(self.session, rpc_timeout_sec=rpc_timeout_sec)
         self.user = UserService(self.session, rpc_timeout_sec=rpc_timeout_sec)
         self.warehouse = WarehouseService(self.session, config_data, rpc_timeout_sec=rpc_timeout_sec)
+        self.email = EmailService(self.session, rpc_timeout_sec=rpc_timeout_sec)
+        self.mall = MallService(self.session, rpc_timeout_sec=rpc_timeout_sec)
+        self.monthcard = MonthCardService(self.session, rpc_timeout_sec=rpc_timeout_sec)
+        self.vip = VipService(self.session, rpc_timeout_sec=rpc_timeout_sec)
+        self.share = ShareService(self.session, rpc_timeout_sec=rpc_timeout_sec)
         self.invite = InviteService(
             self.user,
             platform=str(self.session_config.platform or self.account.get("platform") or "qq"),
@@ -241,6 +251,110 @@ class AccountRuntime:
             if claimed > 0:
                 self._record("taskClaim", claimed)
             return result
+
+    async def get_email_list(self, box_type: int = 1) -> dict[str, Any]:
+        reply = await self.email.get_email_list(box_type)
+        rows: list[dict[str, Any]] = []
+        for item in list(reply.emails or []):
+            rows.append(
+                {
+                    "id": str(getattr(item, "id", "") or ""),
+                    "mailType": _to_int(getattr(item, "mail_type", 0), 0),
+                    "title": str(getattr(item, "title", "") or ""),
+                    "claimed": bool(getattr(item, "claimed", False)),
+                    "hasReward": bool(getattr(item, "has_reward", False)),
+                    "subtitle": str(getattr(item, "subtitle", "") or ""),
+                }
+            )
+        return {"boxType": _to_int(box_type, 1), "emails": rows}
+
+    async def claim_email(self, box_type: int = 1, email_id: str = "", *, batch: bool = False) -> dict[str, Any]:
+        if batch:
+            reply = await self.email.batch_claim_email(box_type, email_id)
+        else:
+            reply = await self.email.claim_email(box_type, email_id)
+        return {
+            "boxType": _to_int(box_type, 1),
+            "emailId": str(email_id or ""),
+            "batch": bool(batch),
+            "items": self._format_core_items(list(getattr(reply, "items", []) or [])),
+        }
+
+    async def get_mall_goods(self, slot_type: int = 1) -> dict[str, Any]:
+        rows: list[dict[str, Any]] = []
+        for goods in await self.mall.get_mall_goods_list(slot_type):
+            rows.append(
+                {
+                    "goodsId": _to_int(getattr(goods, "goods_id", 0), 0),
+                    "name": str(getattr(goods, "name", "") or ""),
+                    "type": _to_int(getattr(goods, "type", 0), 0),
+                    "isFree": bool(getattr(goods, "is_free", False)),
+                    "isLimited": bool(getattr(goods, "is_limited", False)),
+                    "discount": str(getattr(goods, "discount", "") or ""),
+                }
+            )
+        return {"slotType": _to_int(slot_type, 1), "goods": rows}
+
+    async def purchase_mall_goods(self, goods_id: int, count: int = 1) -> dict[str, Any]:
+        reply = await self.mall.purchase(goods_id, count)
+        return {
+            "goodsId": _to_int(getattr(reply, "goods_id", goods_id), 0),
+            "count": _to_int(getattr(reply, "count", count), 0),
+            "rewardInfoSize": len(bytes(getattr(reply, "reward_info", b"") or b"")),
+            "resultSize": len(bytes(getattr(reply, "result", b"") or b"")),
+        }
+
+    async def get_monthcard_infos(self) -> dict[str, Any]:
+        reply = await self.monthcard.get_month_card_infos()
+        infos: list[dict[str, Any]] = []
+        for row in list(reply.infos or []):
+            reward = getattr(row, "reward", None)
+            reward_payload: dict[str, int] | None = None
+            if reward is not None:
+                reward_payload = {
+                    "id": _to_int(getattr(reward, "id", 0), 0),
+                    "count": _to_int(getattr(reward, "count", 0), 0),
+                }
+            infos.append(
+                {
+                    "goodsId": _to_int(getattr(row, "goods_id", 0), 0),
+                    "canClaim": bool(getattr(row, "can_claim", False)),
+                    "reward": reward_payload,
+                }
+            )
+        return {"infos": infos}
+
+    async def claim_monthcard_reward(self, goods_id: int) -> dict[str, Any]:
+        reply = await self.monthcard.claim_month_card_reward(goods_id)
+        return {"goodsId": _to_int(goods_id, 0), "items": self._format_core_items(list(reply.items or []))}
+
+    async def get_vip_daily_status(self) -> dict[str, Any]:
+        reply = await self.vip.get_daily_gift_status()
+        return {
+            "canClaim": bool(getattr(reply, "can_claim", False)),
+            "hasGift": bool(getattr(reply, "has_gift", False)),
+        }
+
+    async def claim_vip_daily_gift(self) -> dict[str, Any]:
+        reply = await self.vip.claim_daily_gift()
+        return {"items": self._format_core_items(list(reply.items or []))}
+
+    async def check_can_share(self) -> dict[str, Any]:
+        reply = await self.share.check_can_share()
+        return {"canShare": bool(getattr(reply, "can_share", False))}
+
+    async def report_share(self, shared: bool = True) -> dict[str, Any]:
+        reply = await self.share.report_share(shared)
+        return {"shared": bool(shared), "success": bool(getattr(reply, "success", False))}
+
+    async def claim_share_reward(self, claimed: bool = True) -> dict[str, Any]:
+        reply = await self.share.claim_share_reward(claimed)
+        return {
+            "claimed": bool(claimed),
+            "success": bool(getattr(reply, "success", False)),
+            "hasReward": bool(getattr(reply, "has_reward", False)),
+            "items": self._format_core_items(list(reply.items or [])),
+        }
 
     async def _connect_and_login(self) -> None:
         code = str(self.account.get("code") or "").strip()
@@ -846,6 +960,18 @@ class AccountRuntime:
 
     def _record(self, key: str, value: int) -> None:
         self.operations[key] = _to_int(self.operations.get(key), 0) + max(0, _to_int(value))
+
+    @staticmethod
+    def _format_core_items(items: list[Any]) -> list[dict[str, int]]:
+        rows: list[dict[str, int]] = []
+        for item in list(items or []):
+            rows.append(
+                {
+                    "id": _to_int(getattr(item, "id", 0), 0),
+                    "count": _to_int(getattr(item, "count", 0), 0),
+                }
+            )
+        return rows
 
     def _debug_log(self, tag: str, message: str, **meta: Any) -> None:
         if self.logger and hasattr(self.logger, "debug"):
