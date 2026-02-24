@@ -254,13 +254,13 @@ class QFarmCommandRouter:
         if cmd in {"种满", "种地", "种菜"}:
             return await self._cmd_farm(user_id, ["操作", "plant"])
         if cmd in {"帮助", "help", "h", "?"}:
-            return [RouterReply(text=self._help_text())]
+            return [RouterReply(text=self._help_text(args))]
         if cmd in {"服务", "service"}:
             return await self._cmd_service(args)
         if cmd in {"账号", "account"}:
             return await self._cmd_account(event, user_id, args)
         if cmd in {"状态", "status"}:
-            return await self._cmd_status(user_id)
+            return await self._cmd_status(user_id, args)
         if cmd in {"农田", "farm"}:
             return await self._cmd_farm(user_id, args)
         if cmd in {"好友", "friend"}:
@@ -452,10 +452,11 @@ class QFarmCommandRouter:
 
         return [RouterReply(text="未知账号子命令。")]
 
-    async def _cmd_status(self, user_id: str) -> list[RouterReply]:
+    async def _cmd_status(self, user_id: str, args: list[str] | None = None) -> list[RouterReply]:
         account_id, _ = await self._require_bound_account(user_id)
+        verbose, _ = self._extract_verbose_flag(args or [])
         data = await self.api.get_status(account_id)
-        return [RouterReply(text="\n".join(self._format_status(data)))]
+        return [RouterReply(text="\n".join(self._format_status(data, verbose=verbose)))]
 
     async def _cmd_farm(self, user_id: str, args: list[str]) -> list[RouterReply]:
         if not args:
@@ -581,14 +582,15 @@ class QFarmCommandRouter:
         return [RouterReply(text="\n".join(lines))]
 
     async def _cmd_email(self, user_id: str, args: list[str]) -> list[RouterReply]:
-        if not args:
+        verbose, clean_args = self._extract_verbose_flag(args)
+        if not clean_args:
             return [RouterReply(text="用法: qfarm 邮件 查看 [1|2|all] | 领取")]
-        sub = self._token(args[0])
+        sub = self._token(clean_args[0])
         account_id, _ = await self._require_bound_account(user_id)
         if sub in {"查看", "view", "list", "列表"}:
             targets = [1, 2]
-            if len(args) >= 2:
-                raw = self._token(args[1])
+            if len(clean_args) >= 2:
+                raw = self._token(clean_args[1])
                 if raw in {"1", "2"}:
                     targets = [int(raw)]
                 elif raw not in {"all", "全部"}:
@@ -606,13 +608,14 @@ class QFarmCommandRouter:
             return [RouterReply(text="\n".join(lines))]
         if sub in {"领取", "claim", "run", "一键", "一键领取"}:
             result = await self.api.run_daily_routine(account_id, "email", force=True)
-            return [RouterReply(text=self._format_daily_routine_result("邮件", result))]
+            return [RouterReply(text=self._format_daily_routine_result("邮件", result, verbose=verbose))]
         return [RouterReply(text="用法: qfarm 邮件 查看 [1|2|all] | 领取")]
 
     async def _cmd_mall(self, user_id: str, args: list[str]) -> list[RouterReply]:
-        if not args:
+        verbose, clean_args = self._extract_verbose_flag(args)
+        if not clean_args:
             return [RouterReply(text="用法: qfarm 商城 列表 | 领取 | 购买 <goodsId> [count]")]
-        sub = self._token(args[0])
+        sub = self._token(clean_args[0])
         account_id, _ = await self._require_bound_account(user_id)
         if sub in {"列表", "list", "查看", "view"}:
             payload = await self.api.get_mall_goods(account_id, 1)
@@ -629,23 +632,24 @@ class QFarmCommandRouter:
             return [RouterReply(text="\n".join(lines))]
         if sub in {"领取", "claim", "run"}:
             result = await self.api.run_daily_routine(account_id, "mall", force=True)
-            return [RouterReply(text=self._format_daily_routine_result("商城", result))]
+            return [RouterReply(text=self._format_daily_routine_result("商城", result, verbose=verbose))]
         if sub in {"购买", "buy"}:
-            if len(args) < 2 or not str(args[1]).isdigit():
+            if len(clean_args) < 2 or not str(clean_args[1]).isdigit():
                 return [RouterReply(text="用法: qfarm 商城 购买 <goodsId> [count]")]
-            goods_id = int(args[1])
+            goods_id = int(clean_args[1])
             count = 1
-            if len(args) >= 3 and str(args[2]).isdigit():
-                count = max(1, int(args[2]))
+            if len(clean_args) >= 3 and str(clean_args[2]).isdigit():
+                count = max(1, int(clean_args[2]))
             result = await self.api.purchase_mall_goods(account_id, goods_id, count)
             bought = result.get("count", count) if isinstance(result, dict) else count
             return [RouterReply(text=f"商城购买完成: goodsId={goods_id} count={bought}")]
         return [RouterReply(text="用法: qfarm 商城 列表 | 领取 | 购买 <goodsId> [count]")]
 
     async def _cmd_monthcard(self, user_id: str, args: list[str]) -> list[RouterReply]:
-        if not args:
+        verbose, clean_args = self._extract_verbose_flag(args)
+        if not clean_args:
             return [RouterReply(text="用法: qfarm 月卡 查看 | 领取")]
-        sub = self._token(args[0])
+        sub = self._token(clean_args[0])
         account_id, _ = await self._require_bound_account(user_id)
         if sub in {"查看", "view", "list", "列表"}:
             payload = await self.api.get_monthcard_infos(account_id)
@@ -660,33 +664,35 @@ class QFarmCommandRouter:
             return [RouterReply(text="\n".join(lines))]
         if sub in {"领取", "claim", "run"}:
             result = await self.api.run_daily_routine(account_id, "monthcard", force=True)
-            return [RouterReply(text=self._format_daily_routine_result("月卡", result))]
+            return [RouterReply(text=self._format_daily_routine_result("月卡", result, verbose=verbose))]
         return [RouterReply(text="用法: qfarm 月卡 查看 | 领取")]
 
     async def _cmd_vip(self, user_id: str, args: list[str]) -> list[RouterReply]:
-        if not args:
+        verbose, clean_args = self._extract_verbose_flag(args)
+        if not clean_args:
             return [RouterReply(text="用法: qfarm 会员 查看 | 领取")]
-        sub = self._token(args[0])
+        sub = self._token(clean_args[0])
         account_id, _ = await self._require_bound_account(user_id)
         if sub in {"查看", "view", "status", "状态"}:
             payload = await self.api.get_vip_daily_status(account_id)
             return [RouterReply(text=f"【会员】canClaim={bool(payload.get('canClaim'))} hasGift={bool(payload.get('hasGift'))}")]
         if sub in {"领取", "claim", "run"}:
             result = await self.api.run_daily_routine(account_id, "vip", force=True)
-            return [RouterReply(text=self._format_daily_routine_result("会员", result))]
+            return [RouterReply(text=self._format_daily_routine_result("会员", result, verbose=verbose))]
         return [RouterReply(text="用法: qfarm 会员 查看 | 领取")]
 
     async def _cmd_share(self, user_id: str, args: list[str]) -> list[RouterReply]:
-        if not args:
+        verbose, clean_args = self._extract_verbose_flag(args)
+        if not clean_args:
             return [RouterReply(text="用法: qfarm 分享 查看 | 领取")]
-        sub = self._token(args[0])
+        sub = self._token(clean_args[0])
         account_id, _ = await self._require_bound_account(user_id)
         if sub in {"查看", "view", "status", "状态"}:
             payload = await self.api.check_can_share(account_id)
             return [RouterReply(text=f"【分享】canShare={bool(payload.get('canShare'))}")]
         if sub in {"领取", "claim", "run"}:
             result = await self.api.run_daily_routine(account_id, "share", force=True)
-            return [RouterReply(text=self._format_daily_routine_result("分享", result))]
+            return [RouterReply(text=self._format_daily_routine_result("分享", result, verbose=verbose))]
         return [RouterReply(text="用法: qfarm 分享 查看 | 领取")]
 
     async def _cmd_push(self, user_id: str, args: list[str]) -> list[RouterReply]:
@@ -786,26 +792,43 @@ class QFarmCommandRouter:
             )
         ]
 
-    def _format_daily_routine_result(self, title: str, payload: dict[str, Any]) -> str:
+    def _format_daily_routine_result(self, title: str, payload: dict[str, Any], *, verbose: bool = False) -> str:
         if not isinstance(payload, dict):
-            return f"【{title}】执行完成"
-        lines = [f"【{title}】执行结果"]
-        for key in ("routine", "statusCode", "claimed", "rewardItems", "bought", "error", "pausedNoCoupon", "alreadyClaimed"):
+            return f"【{title}】status=ok"
+
+        status_code = str(payload.get("statusCode") or "").strip()
+        if not status_code:
+            status_code = "error" if payload.get("error") else "ok"
+        lines = [f"【{title}】status={status_code}"]
+
+        count_parts: list[str] = []
+        for key in ("claimed", "bought", "rewardItems"):
             if key in payload:
-                lines.append(f"- {key}: {payload.get(key)}")
-        if "freeGifts" in payload:
-            lines.append(f"- freeGifts: {payload.get('freeGifts')}")
-        if "organicFertilizer" in payload:
-            lines.append(f"- organicFertilizer: {payload.get('organicFertilizer')}")
-        state = payload.get("state")
-        if isinstance(state, dict):
-            lines.append(
-                "- state: "
-                f"doneDateKey={state.get('doneDateKey') or '-'} "
-                f"lastCheckAt={state.get('lastCheckAt') or 0} "
-                f"lastClaimAt={state.get('lastClaimAt') or 0} "
-                f"lastResult={state.get('lastResult') or '-'}"
-            )
+                count_parts.append(f"{key}={payload.get(key)}")
+        if count_parts:
+            lines.append(" ".join(count_parts))
+
+        error_text = str(payload.get("error") or "").strip()
+        if error_text:
+            lines.append(f"error={error_text}")
+
+        if verbose:
+            for key in ("routine", "pausedNoCoupon", "alreadyClaimed"):
+                if key in payload:
+                    lines.append(f"- {key}: {payload.get(key)}")
+            if "freeGifts" in payload:
+                lines.append(f"- freeGifts: {payload.get('freeGifts')}")
+            if "organicFertilizer" in payload:
+                lines.append(f"- organicFertilizer: {payload.get('organicFertilizer')}")
+            state = payload.get("state")
+            if isinstance(state, dict):
+                lines.append(
+                    "- state: "
+                    f"doneDateKey={state.get('doneDateKey') or '-'} "
+                    f"lastCheckAt={state.get('lastCheckAt') or 0} "
+                    f"lastClaimAt={state.get('lastClaimAt') or 0} "
+                    f"lastResult={state.get('lastResult') or '-'}"
+                )
         return "\n".join(lines)
 
     async def _cmd_automation(self, user_id: str, args: list[str]) -> list[RouterReply]:
@@ -967,19 +990,27 @@ class QFarmCommandRouter:
 
     async def _cmd_logs(self, user_id: str, args: list[str]) -> list[RouterReply]:
         account_id, _ = await self._require_bound_account(user_id)
-        limit, options = parse_key_value_args(args)
-        safe_limit = 50 if limit is None else min(300, max(1, int(limit)))
+        verbose, clean_args = self._extract_verbose_flag(args)
+        limit, options = parse_key_value_args(clean_args)
+        default_limit = 50 if verbose else 20
+        safe_limit = default_limit if limit is None else min(300, max(1, int(limit)))
+        if "isWarn" in options:
+            is_warn = options.get("isWarn", "")
+        else:
+            is_warn = "" if verbose else "1"
         logs = await self.api.get_logs(
             account_id,
             limit=safe_limit,
             module=options.get("module", ""),
             event=options.get("event", ""),
             keyword=options.get("keyword", ""),
-            isWarn=options.get("isWarn", ""),
+            isWarn=is_warn,
             timeFrom=options.get("timeFrom", ""),
             timeTo=options.get("timeTo", ""),
         )
         lines = [f"【日志】数量: {len(logs)} (limit={safe_limit})"]
+        if not verbose and "isWarn" not in options:
+            lines[0] += " (isWarn=1)"
         if not logs:
             lines.append("无匹配日志。")
             return [RouterReply(text="\n".join(lines))]
@@ -993,9 +1024,10 @@ class QFarmCommandRouter:
         return [RouterReply(text="\n".join(lines))]
 
     async def _cmd_account_logs(self, args: list[str]) -> list[RouterReply]:
-        limit = 50
-        if args and str(args[0]).isdigit():
-            limit = min(300, max(1, int(args[0])))
+        verbose, clean_args = self._extract_verbose_flag(args)
+        limit = 50 if verbose else 20
+        if clean_args and str(clean_args[0]).isdigit():
+            limit = min(300, max(1, int(clean_args[0])))
         logs = await self.api.get_account_logs(limit=limit)
         lines = [f"【账号日志】数量: {len(logs)} (limit={limit})"]
         if not logs:
@@ -1057,53 +1089,190 @@ class QFarmCommandRouter:
 
         return [RouterReply(text="白名单动作仅支持 列表|添加|删除")]
 
-    def _help_text(self) -> str:
+    def _help_text(self, args: list[str] | None = None) -> str:
+        verbose, clean_args = self._extract_verbose_flag(args or [])
+        if not clean_args:
+            return self._help_text_verbose() if verbose else self._help_text_brief()
+        return self._help_text_module(clean_args[0])
+
+    def _help_text_brief(self) -> str:
         return (
-            "qfarm 命令总览\n"
+            "qfarm 帮助（模块索引）\n"
+            "1) 服务 -> qfarm 帮助 服务\n"
+            "2) 账号 -> qfarm 帮助 账号\n"
+            "3) 农田 -> qfarm 帮助 农田\n"
+            "4) 好友 -> qfarm 帮助 好友\n"
+            "5) 任务(日常) -> qfarm 帮助 任务\n"
+            "6) 自动化 -> qfarm 帮助 自动化\n"
+            "7) 设置 -> qfarm 帮助 设置\n"
+            "8) 主题 -> qfarm 帮助 主题\n"
+            "9) 日志 -> qfarm 帮助 日志\n"
+            "10) 推送 -> qfarm 帮助 推送\n"
+            "11) 白名单 -> qfarm 帮助 白名单\n"
+            "\n完整命令清单: qfarm 帮助 详细\n"
+            "输出回看说明: 在 状态/日志/日常领取 命令后追加 “详细”"
+        )
+
+    def _help_text_verbose(self) -> str:
+        return (
+            "qfarm 命令总览（详细）\n"
             "1) qfarm 帮助\n"
-            "2) qfarm 服务 状态|启动|停止|重启 (超管)\n"
-            "3) qfarm 账号 查看\n"
-            "4) qfarm 账号 绑定 code <code> [备注名]\n"
-            "5) qfarm 账号 绑定扫码\n"
-            "6) qfarm 账号 取消扫码\n"
-            "7) qfarm 账号 解绑\n"
-            "8) qfarm 账号 启动\n"
-            "9) qfarm 账号 停止\n"
-            "10) qfarm 账号 重连 [code]\n"
-            "11) qfarm 状态\n"
-            "12) qfarm 农田 查看\n"
-            "13) qfarm 农田 操作 all|harvest|clear|plant|upgrade\n"
-            "14) qfarm 好友 列表\n"
-            "15) qfarm 好友 农田 <gid>\n"
-            "16) qfarm 好友 操作 <gid> steal|water|weed|bug|bad\n"
-            "17) qfarm 种子 列表\n"
-            "18) qfarm 背包 查看\n"
-            "19) qfarm 分析 [exp|fert|profit|fert_profit|level]\n"
-            "20) qfarm 自动化 查看\n"
-            "21) qfarm 自动化 设置 <key> <on|off> | 全开|全关\n"
-            "22) qfarm 自动化 施肥 <both|normal|organic|none>\n"
-            "23) qfarm 设置 策略 <preferred|level|max_exp|max_fert_exp|max_profit|max_fert_profit>\n"
-            "24) qfarm 设置 种子 <seedId>\n"
-            "25) qfarm 设置 间隔 农场 <minSec> <maxSec>\n"
-            "26) qfarm 设置 间隔 好友 <minSec> <maxSec>\n"
-            "27) qfarm 设置 静默 <on|off> <HH:MM> <HH:MM>\n"
-            "28) qfarm 主题 <dark|light>\n"
-            "29) qfarm 日志 [limit] [module=...] [event=...] [keyword=...] [isWarn=0|1]\n"
-            "30) qfarm 账号日志 [limit]\n"
-            "31) qfarm 推送 查看\n"
-            "32) qfarm 推送 设置 开关 <on|off>\n"
-            "33) qfarm 推送 设置 通道 <webhook>\n"
-            "34) qfarm 推送 设置 地址 <url>\n"
-            "35) qfarm 推送 设置 令牌 <token>\n"
-            "36) qfarm 推送 测试\n"
-            "37) qfarm 推送 清空\n"
-            "38) qfarm 调试 出售 (超管)\n"
-            "39) qfarm 白名单 用户 列表|添加|删除 <uid> (超管)\n"
-            "40) qfarm 白名单 群 列表|添加|删除 <gid> (超管)\n"
+            "2) qfarm 帮助 <服务|账号|农田|好友|任务|自动化|设置|主题|日志|推送|白名单>\n"
+            "3) qfarm 帮助 详细\n"
+            "4) qfarm 服务 状态|启动|停止|重启 (超管)\n"
+            "5) qfarm 账号 查看\n"
+            "6) qfarm 账号 绑定 code <code> [备注名]\n"
+            "7) qfarm 账号 绑定扫码\n"
+            "8) qfarm 账号 取消扫码\n"
+            "9) qfarm 账号 解绑\n"
+            "10) qfarm 账号 启动\n"
+            "11) qfarm 账号 停止\n"
+            "12) qfarm 账号 重连 [code]\n"
+            "13) qfarm 状态 [详细]\n"
+            "14) qfarm 农田 查看\n"
+            "15) qfarm 农田 操作 all|harvest|clear|plant|upgrade\n"
+            "16) qfarm 好友 列表\n"
+            "17) qfarm 好友 农田 <gid>\n"
+            "18) qfarm 好友 操作 <gid> steal|water|weed|bug|bad\n"
+            "19) qfarm 种子 列表\n"
+            "20) qfarm 背包 查看\n"
+            "21) qfarm 分析 [exp|fert|profit|fert_profit|level]\n"
+            "22) qfarm 自动化 查看\n"
+            "23) qfarm 自动化 设置 <key> <on|off> | 全开|全关\n"
+            "24) qfarm 自动化 施肥 <both|normal|organic|none>\n"
+            "25) qfarm 设置 策略 <preferred|level|max_exp|max_fert_exp|max_profit|max_fert_profit>\n"
+            "26) qfarm 设置 种子 <seedId>\n"
+            "27) qfarm 设置 间隔 农场 <minSec> <maxSec>\n"
+            "28) qfarm 设置 间隔 好友 <minSec> <maxSec>\n"
+            "29) qfarm 设置 静默 <on|off> <HH:MM> <HH:MM>\n"
+            "30) qfarm 主题 <dark|light>\n"
+            "31) qfarm 日志 [limit] [module=...] [event=...] [keyword=...] [isWarn=0|1] [详细]\n"
+            "32) qfarm 账号日志 [limit] [详细]\n"
+            "33) qfarm 邮件 查看 [1|2|all] | 领取 [详细]\n"
+            "34) qfarm 商城 列表 | 领取 [详细] | 购买 <goodsId> [count]\n"
+            "35) qfarm 月卡 查看 | 领取 [详细]\n"
+            "36) qfarm 会员 查看 | 领取 [详细]\n"
+            "37) qfarm 分享 查看 | 领取 [详细]\n"
+            "38) qfarm 推送 查看\n"
+            "39) qfarm 推送 设置 开关 <on|off>\n"
+            "40) qfarm 推送 设置 通道 <webhook>\n"
+            "41) qfarm 推送 设置 地址 <url>\n"
+            "42) qfarm 推送 设置 令牌 <token>\n"
+            "43) qfarm 推送 测试\n"
+            "44) qfarm 推送 清空\n"
+            "45) qfarm 调试 出售 (超管)\n"
+            "46) qfarm 白名单 用户 列表|添加|删除 <uid> (超管)\n"
+            "47) qfarm 白名单 群 列表|添加|删除 <gid> (超管)\n"
             "\n同样支持中文别名命令: 农场 ..."
             "\n快捷命令: qfarm 登录 | qfarm 退出登录 | qfarm 启动 | qfarm 停止 | qfarm 全自动 [开|关]"
             "\n快速播种: qfarm 种满"
             "\n误拼兼容: qfram ..."
+        )
+
+    def _help_text_module(self, module_token: str) -> str:
+        token = self._token(module_token)
+        module_aliases = {
+            "服务": {"服务", "service"},
+            "账号": {"账号", "account", "登录", "logout"},
+            "农田": {"农田", "farm"},
+            "好友": {"好友", "friend"},
+            "任务": {"任务", "日常", "任务(日常)", "task", "daily"},
+            "自动化": {"自动化", "automation", "auto"},
+            "设置": {"设置", "setting", "settings"},
+            "主题": {"主题", "theme"},
+            "日志": {"日志", "log", "logs", "账号日志", "accountlogs", "account-logs"},
+            "推送": {"推送", "push"},
+            "白名单": {"白名单", "whitelist"},
+        }
+        module_name = ""
+        for name, aliases in module_aliases.items():
+            if token in aliases:
+                module_name = name
+                break
+        if not module_name:
+            return f"未知帮助模块: {module_token}\n\n{self._help_text_brief()}"
+
+        if module_name == "服务":
+            return (
+                "【服务模块】\n"
+                "- qfarm 服务 状态\n"
+                "- qfarm 服务 启动|停止|重启 (超管)\n"
+                "- 示例: qfarm 服务 状态"
+            )
+        if module_name == "账号":
+            return (
+                "【账号模块】\n"
+                "- qfarm 账号 查看|绑定 code <code>|绑定扫码|取消扫码|解绑|启动|停止|重连 [code]\n"
+                "- 快捷: qfarm 登录 | qfarm 退出登录 | qfarm 启动 | qfarm 停止\n"
+                "- 示例: qfarm 账号 绑定扫码"
+            )
+        if module_name == "农田":
+            return (
+                "【农田模块】\n"
+                "- qfarm 状态 [详细]\n"
+                "- qfarm 农田 查看\n"
+                "- qfarm 农田 操作 all|harvest|clear|plant|upgrade\n"
+                "- 快捷: qfarm 种满"
+            )
+        if module_name == "好友":
+            return (
+                "【好友模块】\n"
+                "- qfarm 好友 列表\n"
+                "- qfarm 好友 农田 <gid>\n"
+                "- qfarm 好友 操作 <gid> steal|water|weed|bug|bad"
+            )
+        if module_name == "任务":
+            return (
+                "【任务(日常)模块】\n"
+                "- qfarm 邮件 查看 [1|2|all] | 领取 [详细]\n"
+                "- qfarm 商城 列表 | 领取 [详细] | 购买 <goodsId> [count]\n"
+                "- qfarm 月卡 查看 | 领取 [详细]\n"
+                "- qfarm 会员 查看 | 领取 [详细]\n"
+                "- qfarm 分享 查看 | 领取 [详细]"
+            )
+        if module_name == "自动化":
+            return (
+                "【自动化模块】\n"
+                "- qfarm 自动化 查看\n"
+                "- qfarm 自动化 设置 <key> <on|off>\n"
+                "- qfarm 自动化 施肥 <both|normal|organic|none>\n"
+                "- qfarm 自动化 全开|全关\n"
+                "- 快捷: qfarm 全自动 [开|关]"
+            )
+        if module_name == "设置":
+            return (
+                "【设置模块】\n"
+                "- qfarm 设置 策略 <preferred|level|max_exp|max_fert_exp|max_profit|max_fert_profit>\n"
+                "- qfarm 设置 种子 <seedId>\n"
+                "- qfarm 设置 间隔 农场|好友 <minSec> <maxSec>\n"
+                "- qfarm 设置 静默 <on|off> <HH:MM> <HH:MM>"
+            )
+        if module_name == "主题":
+            return "【主题模块】\n- qfarm 主题 <dark|light>"
+        if module_name == "日志":
+            return (
+                "【日志模块】\n"
+                "- qfarm 日志\n"
+                "- qfarm 日志 详细\n"
+                "- qfarm 日志 30 module=task event=daily_summary keyword=error isWarn=1\n"
+                "- qfarm 账号日志 [limit] [详细]\n"
+                "- 默认策略: `日志` 为告警优先（isWarn=1, limit=20）"
+            )
+        if module_name == "推送":
+            return (
+                "【推送模块】\n"
+                "- qfarm 推送 查看\n"
+                "- qfarm 推送 设置 开关 <on|off>\n"
+                "- qfarm 推送 设置 通道 <webhook>\n"
+                "- qfarm 推送 设置 地址 <url>\n"
+                "- qfarm 推送 设置 令牌 <token>\n"
+                "- qfarm 推送 测试\n"
+                "- qfarm 推送 清空"
+            )
+        return (
+            "【白名单模块】\n"
+            "- qfarm 白名单 用户 列表|添加|删除 <uid> (超管)\n"
+            "- qfarm 白名单 群 列表|添加|删除 <gid> (超管)"
         )
 
     def _format_farm_op_result(self, op_type: str, result: dict[str, Any] | None) -> str:
@@ -1358,7 +1527,7 @@ class QFarmCommandRouter:
 
     def _is_write_command(self, tokens: list[str]) -> bool:
         cmd = self._token(tokens[0]) if tokens else ""
-        args = [self._token(item) for item in tokens[1:]]
+        args = [self._token(item) for item in tokens[1:] if not self._is_verbose_token(item)]
         if cmd in {"登录", "login", "signin", "退出登录", "logout", "signout"}:
             return True
         if cmd in {"启动", "start", "停止", "stop", "重连", "reconnect"}:
@@ -1499,7 +1668,7 @@ class QFarmCommandRouter:
         except Exception:
             return None
 
-    def _format_status(self, data: dict[str, Any]) -> list[str]:
+    def _format_status(self, data: dict[str, Any], *, verbose: bool = False) -> list[str]:
         status = data.get("status", {}) if isinstance(data, dict) else {}
         conn = data.get("connection", {}) if isinstance(data, dict) else {}
         ops = data.get("operations", {}) if isinstance(data, dict) else {}
@@ -1509,6 +1678,23 @@ class QFarmCommandRouter:
         runtime_state = data.get("runtimeState", "stopped") if isinstance(data, dict) else "stopped"
         retry_count = data.get("startRetryCount", 0) if isinstance(data, dict) else 0
         last_error = str(data.get("lastStartError") or "") if isinstance(data, dict) else ""
+
+        auto_snapshot = self._format_automation_snapshot(automation if isinstance(automation, dict) else {})
+        if not verbose:
+            lines = [
+                "【农场状态】",
+                f"连接: {'在线' if conn.get('connected') else '离线'} | 运行态: {runtime_state}",
+                f"账号: {status.get('name') or '-'} Lv{status.get('level', 0)}",
+                f"资源: 金币{status.get('gold', 0)} 经验{status.get('exp', 0)} 点券{status.get('coupon', 0)}",
+            ]
+            lines.append(f"自动化: {auto_snapshot or '-'}")
+            lines.append(
+                f"倒计时: 农田{next_checks.get('farmRemainSec', '--')}s "
+                f"好友{next_checks.get('friendRemainSec', '--')}s"
+            )
+            if last_error:
+                lines.append(f"最近启动错误: {last_error}")
+            return lines
 
         lines = [
             "【农场状态】",
@@ -1530,7 +1716,6 @@ class QFarmCommandRouter:
             f"下次好友巡查: {next_checks.get('friendRemainSec', '--')}s",
             f"经验进度: {exp_progress.get('current', 0)}/{exp_progress.get('needed', 0)}",
         ]
-        auto_snapshot = self._format_automation_snapshot(automation if isinstance(automation, dict) else {})
         if auto_snapshot:
             lines.append(f"自动化: {auto_snapshot}")
         farm_remain = self._safe_int(next_checks.get("farmRemainSec"), -1)
@@ -1670,6 +1855,20 @@ class QFarmCommandRouter:
         if len(lands) > 80:
             lines.append(f"... 共 {len(lands)} 块，仅展示前 80 块。")
         return lines
+
+    def _is_verbose_token(self, token: str) -> bool:
+        value = self._token(token)
+        return value in {"详细", "detail", "verbose", "v"}
+
+    def _extract_verbose_flag(self, args: list[str]) -> tuple[bool, list[str]]:
+        verbose = False
+        clean_args: list[str] = []
+        for item in args:
+            if self._is_verbose_token(item):
+                verbose = True
+                continue
+            clean_args.append(item)
+        return verbose, clean_args
 
     def _parse_bool(self, value: str) -> bool | None:
         text = self._token(value)

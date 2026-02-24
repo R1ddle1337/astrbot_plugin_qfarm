@@ -40,6 +40,7 @@ class _FakeApi:
         self.daily_calls.append((account_id, routine, bool(force)))
         return {
             "routine": routine,
+            "statusCode": "ok",
             "claimed": True,
             "rewardItems": 1,
             "state": {"doneDateKey": "2026-02-24", "lastCheckAt": 1, "lastClaimAt": 1, "lastResult": "ok"},
@@ -98,7 +99,8 @@ async def test_email_claim_command_calls_daily_routine(tmp_path: Path):
     replies = await router._cmd_email("u1", ["claim"])
 
     assert api.daily_calls == [("acc-1", "email", True)]
-    assert replies and "邮件" in replies[0].text
+    assert replies and "【邮件】status=ok" in replies[0].text
+    assert "rewardItems=1" in replies[0].text
 
 
 @pytest.mark.asyncio
@@ -140,4 +142,4 @@ async def test_share_claim_command_calls_daily_routine(tmp_path: Path):
     replies = await router._cmd_share("u1", ["claim"])
 
     assert api.daily_calls == [("acc-1", "share", True)]
-    assert replies and "分享" in replies[0].text
+    assert replies and "【分享】status=ok" in replies[0].text

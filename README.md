@@ -97,7 +97,7 @@ pip install -r requirements-dev.txt
 - `qfarm 全自动 开|关` 等价 `qfarm 自动化 全开|全关`
 - `qfarm 种满` 等价 `qfarm 农田 操作 plant`
 
-推送命令（v2.4.1）：
+推送命令（v2.4.2）：
 - `qfarm 推送 查看`
 - `qfarm 推送 设置 开关 <on|off>`
 - `qfarm 推送 设置 通道 <webhook>`
@@ -105,6 +105,13 @@ pip install -r requirements-dev.txt
 - `qfarm 推送 设置 令牌 <token>`
 - `qfarm 推送 测试`
 - `qfarm 推送 清空`
+
+输出精简策略（v2.4.2）：
+- 默认输出为短结果，减少群聊刷屏。
+- 在命令后追加 `详细`（兼容 `detail|verbose|v`）可查看完整输出。
+- `qfarm 日志` 默认告警优先（`isWarn=1`）且默认最近 20 条。
+- `qfarm 日志 详细` 默认展示全级别且默认最近 50 条。
+- `qfarm 帮助` 默认模块索引；`qfarm 帮助 <模块>` 查看二级帮助；`qfarm 帮助 详细` 查看完整清单。
 
 ## 多用户并发策略（新增）
 
@@ -313,7 +320,14 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.4.1
+- Current release: v2.4.2
+- 2026-02-24 v2.4.2
+- Reason: reduce verbose command output in group chats while preserving full troubleshooting details on demand.
+- Change: add unified `详细/detail/verbose/v` display mode; simplify default outputs for `帮助/状态/日志/日常领取`; switch default logs to warn-first (`isWarn=1`, limit=20) with verbose fallback (`limit=50`).
+- Impact: core command behavior stays unchanged, but default responses are significantly shorter and easier to read.
+- Risk: users relying on old full-text defaults may initially miss fields; they can append `详细` to restore full output.
+- Verification: `PYTHONPATH=d:\botproject python -m pytest tests -q` passed (`114 passed`).
+- Verification: `python scripts/check_release_ready.py` passed.
 - 2026-02-24 v2.4.1
 - Reason: deliver phase-3 no-WebUI stability work by adding webhook+token push capability and core-event alert delivery.
 - Change: add `qfarm 推送` command set; add account-level push settings with global defaults; add runtime push delivery (header+body token, retry, structured deliver logs); add daily routine `statusCode` normalization and `daily_summary` structured log.
