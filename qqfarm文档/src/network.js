@@ -18,6 +18,7 @@ let clientSeq = 1;
 let serverSeq = 0;
 let heartbeatTimer = null;
 let pendingCallbacks = new Map();
+let wsErrorState = { code: 0, at: 0, message: '' };
 
 // ============ 用户状态 (登录后设置) ============
 const userState = {
@@ -30,6 +31,13 @@ const userState = {
 };
 
 function getUserState() { return userState; }
+function getWsErrorState() { return { ...wsErrorState }; }
+function setWsErrorState(code, message) {
+    wsErrorState = { code: Number(code) || 0, at: Date.now(), message: message || '' };
+}
+function clearWsErrorState() {
+    wsErrorState = { code: 0, at: 0, message: '' };
+}
 function hasOwn(obj, key) {
     return !!obj && Object.prototype.hasOwnProperty.call(obj, key);
 }
@@ -359,6 +367,7 @@ function sendLogin(onLoginSuccess) {
         try {
             const reply = types.LoginReply.decode(bodyBytes);
             if (reply.basic) {
+                clearWsErrorState();
                 userState.gid = toNum(reply.basic.gid);
                 userState.name = reply.basic.name || '未知';
                 userState.level = toNum(reply.basic.level);
@@ -468,7 +477,16 @@ function connect(code, onLoginSuccess) {
     });
 
     ws.on('error', (err) => {
-        logWarn('系统', `[WS] 错误: ${err.message}`);
+        const message = err && err.message ? String(err.message) : '';
+        logWarn('系统', `[WS] 错误: ${message}`);
+        const match = message.match(/Unexpected server response:\s*(\d+)/i);
+        if (match) {
+            const code = parseInt(match[1], 10) || 0;
+            if (code) {
+                setWsErrorState(code, message);
+                networkEvents.emit('ws_error', { code, message });
+            }
+        }
     });
 }
 
@@ -494,5 +512,6 @@ module.exports = {
     connect, reconnect, cleanup, getWs,
     sendMsg, sendMsgAsync,
     getUserState,
+    getWsErrorState,
     networkEvents,
 };

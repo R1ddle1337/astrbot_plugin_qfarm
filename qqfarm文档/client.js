@@ -7,10 +7,10 @@ const fs = require('fs');
 const path = require('path');
 const { fork } = require('child_process');
 const { startAdminServer } = require('./src/admin');
+const { sendPushooMessage } = require('./src/push');
+const { MiniProgramLoginSession } = require('./src/qrlogin');
 const store = require('./src/store');
-const { getAccounts, deleteAccount } = store;
-
-const AUTO_DELETE_OFFLINE_MS = 5 * 60 * 1000; // 连续离线 5 分钟后自动删除账号
+const { getAccounts, addOrUpdateAccount, deleteAccount } = store;
 
 // ============ 状态管理 ============
 // workers: { [accountId]: { process, status, logs: [], requestQueue: Map } }
@@ -19,6 +19,22 @@ const GLOBAL_LOGS = []; // 全局系统日志
 const ACCOUNT_LOGS = []; // 账号操作日志
 let configRevision = Date.now();
 const OPERATION_KEYS = ['harvest', 'water', 'weed', 'bug', 'fertilize', 'plant', 'steal', 'helpWater', 'helpWeed', 'helpBug', 'taskClaim', 'sell', 'upgrade'];
+const reloginWatchers = new Map(); // key: accountId:loginCode
+
+function pad2(n) {
+    return String(n).padStart(2, '0');
+}
+
+function formatLocalDateTime24(date = new Date()) {
+    const d = date instanceof Date ? date : new Date();
+    const y = d.getFullYear();
+    const m = pad2(d.getMonth() + 1);
+    const day = pad2(d.getDate());
+    const hh = pad2(d.getHours());
+    const mm = pad2(d.getMinutes());
+    const ss = pad2(d.getSeconds());
+    return `${y}-${m}-${day} ${hh}:${mm}:${ss}`;
+}
 
 // 打包后 worker 由当前可执行文件以 --worker 模式启动
 const isWorkerProcess = process.env.FARM_WORKER === '1';
@@ -60,7 +76,7 @@ function broadcastConfigToWorkers(targetAccountId = '') {
 }
 
 function log(tag, msg) {
-    const time = new Date().toLocaleString();
+    const time = formatLocalDateTime24(new Date());
     console.log(`[${tag}] ${msg}`);
     const moduleName = (tag === '系统' || tag === '错误') ? 'system' : '';
     const entry = {
@@ -77,7 +93,7 @@ function log(tag, msg) {
 
 function addAccountLog(action, msg, accountId = '', accountName = '', extra = {}) {
     const entry = {
-        time: new Date().toLocaleString(),
+        time: formatLocalDateTime24(new Date()),
         action,
         msg,
         accountId: accountId ? String(accountId) : '',
@@ -86,6 +102,180 @@ function addAccountLog(action, msg, accountId = '', accountName = '', extra = {}
     };
     ACCOUNT_LOGS.push(entry);
     if (ACCOUNT_LOGS.length > 300) ACCOUNT_LOGS.shift();
+}
+
+async function triggerOfflineReminder(payload = {}) {
+    try {
+        const cfg = store.getOfflineReminder ? store.getOfflineReminder() : null;
+        if (!cfg) return;
+
+        const channelName = String(cfg.channel || '').trim().toLowerCase();
+        const reloginUrlMode = String(cfg.reloginUrlMode || 'none').trim().toLowerCase();
+        const endpoint = String(cfg.endpoint || '').trim();
+        const channel = channelName;
+        const token = String(cfg.token || '').trim();
+        const baseTitle = String(cfg.title || '').trim();
+        const accountName = String(payload.accountName || payload.accountId || '').trim();
+        const title = accountName ? `${baseTitle} ${accountName}` : baseTitle;
+        let content = String(cfg.msg || '').trim();
+        if (!channel || !token || !title || !content) return;
+        if (channel === 'webhook' && !endpoint) return;
+        if (reloginUrlMode === 'qq_link' || reloginUrlMode === 'qr_link') {
+            try {
+                const qr = await MiniProgramLoginSession.requestLoginCode();
+                const loginCode = String((qr && qr.code) || '').trim();
+                const qqUrl = String((qr && (qr.url || qr.loginUrl)) || '').trim();
+                const qrCodeUrl = String((qr && qr.qrcode) || '').trim();
+                if (qqUrl) {
+                    if (reloginUrlMode === 'qq_link') {
+                        content = `${content}\n\n重登录链接: ${qqUrl}`;
+                    } else {
+                        const qrcodeText = qrCodeUrl || qqUrl;
+                        content = `${content}\n\n重登录二维码链接: ${qrcodeText}`;
+                    }
+                }
+                if (loginCode) {
+                    startReloginWatcher({
+                        loginCode,
+                        accountId: String(payload.accountId || '').trim(),
+                        accountName: String(payload.accountName || '').trim(),
+                    });
+                }
+            } catch (e) {
+                log('错误', `获取重登录链接失败: ${e.message}`);
+            }
+        }
+
+        const ret = await sendPushooMessage({
+            channel,
+            endpoint,
+            token,
+            title,
+            content,
+        });
+
+        if (ret && ret.ok) {
+            const accountName = String(payload.accountName || payload.accountId || '');
+            log('系统', `下线提醒发送成功: ${accountName}`);
+        } else {
+            log('错误', `下线提醒发送失败: ${ret && ret.msg ? ret.msg : 'unknown'}`);
+        }
+    } catch (e) {
+        log('错误', `下线提醒发送异常: ${e.message}`);
+    }
+}
+
+function startReloginWatcher({ loginCode, accountId = '', accountName = '' }) {
+    const code = String(loginCode || '').trim();
+    if (!code) return;
+    const key = `${accountId || 'unknown'}:${code}`;
+    if (reloginWatchers.has(key)) return;
+    reloginWatchers.set(key, { startedAt: Date.now() });
+    log('系统', `已启动重登录监听: ${accountName || accountId || '未知账号'}`);
+
+    let stopped = false;
+    const stop = () => {
+        if (stopped) return;
+        stopped = true;
+        reloginWatchers.delete(key);
+    };
+
+    (async () => {
+        const maxRounds = 120; // ~2分钟
+        for (let i = 0; i < maxRounds; i += 1) {
+            try {
+                const status = await MiniProgramLoginSession.queryStatus(code);
+                if (!status || status.status === 'Wait') {
+                    await sleep(1000);
+                    continue;
+                }
+                if (status.status === 'Used') {
+                    log('系统', `重登录二维码已失效: ${accountName || accountId || '未知账号'}`);
+                    stop();
+                    return;
+                }
+                if (status.status === 'OK') {
+                    const ticket = String(status.ticket || '').trim();
+                    const uin = String(status.uin || '').trim();
+                    if (!ticket) {
+                        log('错误', `重登录监听失败: ticket 为空`);
+                        stop();
+                        return;
+                    }
+                    const authCode = await MiniProgramLoginSession.getAuthCode(ticket, '1112386029');
+                    if (!authCode) {
+                        log('错误', `重登录监听失败: 未获取到新 code`);
+                        stop();
+                        return;
+                    }
+                    applyReloginCode({ accountId, accountName, authCode, uin });
+                    stop();
+                    return;
+                }
+                await sleep(1000);
+            } catch (e) {
+                await sleep(1000);
+            }
+        }
+        log('系统', `重登录监听超时: ${accountName || accountId || '未知账号'}`);
+        stop();
+    })();
+}
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms | 0)));
+}
+
+function applyReloginCode({ accountId = '', accountName = '', authCode = '', uin = '' }) {
+    const code = String(authCode || '').trim();
+    if (!code) return;
+    const data = getAccounts();
+    const list = Array.isArray(data.accounts) ? data.accounts : [];
+    const found = list.find(a => String(a.id) === String(accountId));
+    const avatar = uin ? `https://q1.qlogo.cn/g?b=qq&nk=${uin}&s=640` : '';
+
+    if (found) {
+        addOrUpdateAccount({
+            id: found.id,
+            name: found.name,
+            code,
+            platform: found.platform || 'qq',
+            qq: uin || found.qq || found.uin || '',
+            uin: uin || found.uin || found.qq || '',
+            avatar: avatar || found.avatar || '',
+        });
+        restartWorker({
+            ...found,
+            code,
+            qq: uin || found.qq || found.uin || '',
+            uin: uin || found.uin || found.qq || '',
+            avatar: avatar || found.avatar || '',
+        });
+        addAccountLog('update', `重登录成功，已更新账号: ${found.name}`, found.id, found.name, { reason: 'relogin' });
+        log('系统', `重登录成功，账号已更新并重启: ${found.name}`);
+        return;
+    }
+
+    const created = addOrUpdateAccount({
+        name: accountName || (uin ? String(uin) : '重登录账号'),
+        code,
+        platform: 'qq',
+        qq: uin || '',
+        uin: uin || '',
+        avatar,
+    });
+    const newAcc = (created.accounts || [])[created.accounts.length - 1];
+    if (newAcc) {
+        startWorker(newAcc);
+        addAccountLog('add', `重登录成功，已新增账号: ${newAcc.name}`, newAcc.id, newAcc.name, { reason: 'relogin' });
+        log('系统', `重登录成功，已新增账号并启动: ${newAcc.name}`);
+    }
+}
+
+function getOfflineAutoDeleteMs() {
+    const cfg = store.getOfflineReminder ? store.getOfflineReminder() : null;
+    const sec = Math.max(1, parseInt(cfg && cfg.offlineDeleteSec, 10) || 120);
+    return sec * 1000;
 }
 
 function normalizeStatusForPanel(data, accountId, accountName) {
@@ -124,6 +314,7 @@ function buildDefaultStatus(accountId) {
         lastExpGain: 0,
         lastGoldGain: 0,
         limits: {},
+        wsError: null,
         automation: store.getAutomation(accountId),
         preferredSeed: store.getPreferredSeed(accountId),
         expProgress: { current: 0, needed: 0, level: 0 },
@@ -178,7 +369,7 @@ function startWorker(account) {
     if (workers[account.id]) return; // 已运行
 
     log('系统', `正在启动账号: ${account.name}`);
-    
+
     let child = null;
     if (process.pkg) {
         // 打包后也走 fork + execPath，确保 IPC 通道可用
@@ -205,6 +396,7 @@ function startWorker(account) {
         stopping: false,
         disconnectedSince: 0,
         autoDeleteTriggered: false,
+        wsError: null,
     };
 
     // 发送启动指令
@@ -228,23 +420,65 @@ function startWorker(account) {
 
     child.on('exit', (code, signal) => {
         log('系统', `账号 ${account.name} 进程退出 (code=${code}, signal=${signal || 'none'})`);
-        delete workers[account.id];
+        const current = workers[account.id];
+        if (current && current.process === child) {
+            delete workers[account.id];
+        }
     });
 }
 
 function stopWorker(accountId) {
     const worker = workers[accountId];
     if (worker) {
+        const proc = worker.process;
         worker.stopping = true;
         worker.process.send({ type: 'stop' });
         // process.kill will happen in 'exit' handler or we can force it
         setTimeout(() => {
-            if (workers[accountId]) {
-                worker.process.kill();
+            const current = workers[accountId];
+            if (current && current.process === proc) {
+                current.process.kill();
                 delete workers[accountId];
             }
         }, 1000);
     }
+}
+
+function restartWorker(account) {
+    if (!account) return;
+    const accountId = account.id;
+    const worker = workers[accountId];
+    if (!worker) return startWorker(account);
+    const proc = worker.process;
+    let started = false;
+    const startOnce = () => {
+        if (started) return;
+        started = true;
+        const current = workers[accountId];
+        if (!current) return startWorker(account);
+        if (current.process !== proc) return;
+        delete workers[accountId];
+        startWorker(account);
+    };
+    const killIfStale = () => {
+        const current = workers[accountId];
+        if (!current || current.process !== proc) return false;
+        try {
+            current.process.kill();
+        } catch (e) {}
+        delete workers[accountId];
+        return true;
+    };
+    if (proc.exitCode !== null || proc.signalCode) {
+        return startOnce();
+    }
+    proc.once('exit', startOnce);
+    stopWorker(accountId);
+    setTimeout(() => {
+        if (started) return;
+        killIfStale();
+        startOnce();
+    }, 1500);
 }
 
 function handleWorkerMessage(accountId, msg) {
@@ -258,14 +492,22 @@ function handleWorkerMessage(accountId, msg) {
         if (connected) {
             worker.disconnectedSince = 0;
             worker.autoDeleteTriggered = false;
+            worker.wsError = null;
         } else if (!worker.stopping) {
             const now = Date.now();
             if (!worker.disconnectedSince) worker.disconnectedSince = now;
             const offlineMs = now - worker.disconnectedSince;
-            if (!worker.autoDeleteTriggered && offlineMs >= AUTO_DELETE_OFFLINE_MS) {
+            const autoDeleteMs = getOfflineAutoDeleteMs();
+            if (!worker.autoDeleteTriggered && offlineMs >= autoDeleteMs) {
                 worker.autoDeleteTriggered = true;
                 const offlineMin = Math.floor(offlineMs / 60000);
                 log('系统', `账号 ${worker.name} 持续离线 ${offlineMin} 分钟，自动删除账号信息`);
+                triggerOfflineReminder({
+                    accountId,
+                    accountName: worker.name,
+                    reason: 'offline_timeout',
+                    offlineMs,
+                });
                 addAccountLog(
                     'offline_delete',
                     `账号 ${worker.name} 持续离线 ${offlineMin} 分钟，已自动删除`,
@@ -297,16 +539,29 @@ function handleWorkerMessage(accountId, msg) {
         if (GLOBAL_LOGS.length > 1000) GLOBAL_LOGS.shift();
     } else if (msg.type === 'error') {
         log('错误', `账号[${accountId}]进程报错: ${msg.error}`);
+    } else if (msg.type === 'ws_error') {
+        const code = Number(msg.code) || 0;
+        const message = msg.message || '';
+        worker.wsError = { code, message, at: Date.now() };
+        if (code === 400) {
+            addAccountLog(
+                'ws_400',
+                `账号 ${worker.name} 登录失效，请更新 Code`,
+                accountId,
+                worker.name
+            );
+        }
     } else if (msg.type === 'account_kicked') {
         const reason = msg.reason || '未知';
-        log('系统', `账号 ${worker.name} 被踢下线，自动删除账号信息`);
-        addAccountLog('kickout_delete', `账号 ${worker.name} 被踢下线，已自动删除`, accountId, worker.name, { reason });
+        log('系统', `账号 ${worker.name} 被踢下线，已自动停止账号`);
+        triggerOfflineReminder({
+            accountId,
+            accountName: worker.name,
+            reason: `kickout:${reason}`,
+            offlineMs: 0,
+        });
+        addAccountLog('kickout_stop', `账号 ${worker.name} 被踢下线，已自动停止`, accountId, worker.name, { reason });
         stopWorker(accountId);
-        try {
-            deleteAccount(accountId);
-        } catch (e) {
-            log('错误', `删除被踢账号失败: ${e.message}`);
-        }
     } else if (msg.type === 'api_response') {
         const { id, result, error } = msg;
         const req = worker.requests.get(id);
@@ -326,7 +581,7 @@ function callWorkerApi(accountId, method, ...args) {
     return new Promise((resolve, reject) => {
         const id = worker.reqId++;
         worker.requests.set(id, { resolve, reject });
-        
+
         // 超时处理
         setTimeout(() => {
             if (worker.requests.has(id)) {
@@ -350,17 +605,18 @@ const dataProvider = {
         return {
             ...buildDefaultStatus(accountId),
             ...normalizeStatusForPanel(w.status, accountId, w.name),
+            wsError: w.wsError || null,
         };
     },
-    
+
     getLogs: (accountId, optionsOrLimit) => {
         const opts = (typeof optionsOrLimit === 'object' && optionsOrLimit) ? optionsOrLimit : { limit: optionsOrLimit };
         const max = Math.max(1, Number(opts.limit) || 100);
         if (!accountId) {
-            return filterLogs(GLOBAL_LOGS, opts).slice(-max).reverse();
+            return filterLogs(GLOBAL_LOGS, opts).slice(-max);
         }
         const accId = String(accountId);
-        return filterLogs(GLOBAL_LOGS.filter(l => String(l.accountId || '') === accId), opts).slice(-max).reverse();
+        return filterLogs(GLOBAL_LOGS.filter(l => String(l.accountId || '') === accId), opts).slice(-max);
     },
     getAccountLogs: (limit) => ACCOUNT_LOGS.slice(-limit).reverse(),
     addAccountLog: (action, msg, accountId, accountName, extra) => addAccountLog(action, msg, accountId, accountName, extra),
@@ -371,16 +627,16 @@ const dataProvider = {
     getFriendLands: (accountId, gid) => callWorkerApi(accountId, 'getFriendLands', gid),
     doFriendOp: (accountId, gid, opType) => callWorkerApi(accountId, 'doFriendOp', gid, opType),
     getBag: (accountId) => callWorkerApi(accountId, 'getBag'),
+    getDailyGifts: (accountId) => callWorkerApi(accountId, 'getDailyGiftOverview'),
     getSeeds: (accountId) => callWorkerApi(accountId, 'getSeeds'),
-    
+
     setAutomation: async (accountId, key, value) => {
         store.setAutomation(key, value, accountId);
         const rev = nextConfigRevision();
         broadcastConfigToWorkers(accountId);
         return { automation: store.getAutomation(accountId), configRevision: rev };
     },
-    reconnect: (accountId, code) => callWorkerApi(accountId, 'reconnect', { code }),
-    
+
     doFarmOp: (accountId, opType) => callWorkerApi(accountId, 'doFarmOp', opType),
     doAnalytics: (accountId, sortBy) => callWorkerApi(accountId, 'getAnalytics', sortBy),
     saveSettings: async (accountId, payload) => {
@@ -406,8 +662,6 @@ const dataProvider = {
         const snapshot = store.setUITheme(theme);
         return { ui: snapshot.ui || store.getUI() };
     },
-    debugSellFruits: (accountId) => callWorkerApi(accountId, 'debugSellFruits'),
-
     // 账号管理直接操作 store
     getAccounts: () => {
         const data = getAccounts();
@@ -417,20 +671,26 @@ const dataProvider = {
         });
         return data;
     },
-    
+
     startAccount: (id) => {
         const data = getAccounts();
         const acc = data.accounts.find(a => a.id === id);
         if (acc) startWorker(acc);
     },
-    
+
     stopAccount: (id) => stopWorker(id),
+    restartAccount: (id) => {
+        const data = getAccounts();
+        const acc = data.accounts.find(a => a.id === id);
+        if (acc) restartWorker(acc);
+    },
+    isAccountRunning: (accountId) => !!workers[accountId],
 };
 
 // ============ 主入口 ============
 async function main() {
     console.log('正在启动 QQ农场多账号管理服务...');
-    
+
     // 1. 启动 Admin Server
     startAdminServer(dataProvider);
 

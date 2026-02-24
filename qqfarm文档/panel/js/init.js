@@ -23,6 +23,7 @@ window.addEventListener('resize', applyFontScale);
 window.addEventListener('resize', syncOpsRowsMode);
 updateTopbarAccount(null);
 initTheme();
+initPasswordToggles();
 
 // 初始化
 $('btn-refresh').addEventListener('click', () => { window.location.reload(); });

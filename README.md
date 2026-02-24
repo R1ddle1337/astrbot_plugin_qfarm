@@ -269,7 +269,10 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.2.6
+- Current release: v2.2.7
+- 2026-02-24 v2.2.7
+- Fix: pin protobuf runtime to `>=6.31.1,<7` to match checked-in pb2 gencode and avoid plugin import `VersionError`.
+- Chore: sync `qqfarm文档/` baseline (including new proto/module references) for upcoming Python parity work.
 - 2026-02-22 v2.2.6
 - Security: 扫码二维码改为本地生成 PNG，不再依赖第三方二维码服务。
 - Test: 新增本地二维码生成与缓存清理测试。

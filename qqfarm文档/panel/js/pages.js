@@ -21,12 +21,11 @@ function ensureMatureCountdownTimer() {
 
 function renderLandPhaseText(landLevel, land) {
     if (landLevel <= 0) return '未解锁';
-    const base = String((land && land.phaseName) || '');
     const remain = Number((land && land.matureInSec) || 0);
     if (remain > 0) {
-        return `${base} · <span class="mature-countdown" data-remain="${remain}">${fmtRemainSec(remain)}后成熟</span>`;
+        return `<span class="mature-countdown" data-remain="${remain}">${fmtRemainSec(remain)}后成熟</span>`;
     }
-    return base;
+    return '';
 }
 
 // 农场加载
@@ -38,11 +37,11 @@ async function loadFarm() {
     const data = await api('/api/lands');
     const grid = $('farm-grid');
     const sum = $('farm-summary');
-    
-    if (!data || !data.lands) { 
-        grid.innerHTML = '<div style="padding:20px;text-align:center;color:#666">无法获取数据，请确保账号已登录</div>'; 
-        sum.textContent = ''; 
-        return; 
+
+    if (!data || !data.lands) {
+        grid.innerHTML = '<div style="padding:20px;text-align:center;color:#666">无法获取数据，请确保账号已登录</div>';
+        sum.textContent = '';
+        return;
     }
 
     const statusClass = { locked: 'locked', empty: 'empty', harvestable: 'harvestable', growing: 'growing', dead: 'dead', stealable: 'stealable', harvested: 'empty' };
@@ -51,16 +50,8 @@ async function loadFarm() {
         if (l.status === 'stealable') cls = 'harvestable'; // 复用样式
         const landLevel = Number(l.level || 0);
         const landLevelClass = `land-level-${Math.max(0, Math.min(4, landLevel))}`;
-        const landTypeNameMap = {
-            0: '未解锁',
-            1: '黄土地',
-            2: '红土地',
-            3: '黑土地',
-            4: '金土地'
-        };
-        const landTypeName = landTypeNameMap[Math.max(0, Math.min(4, landLevel))] || '土地';
         const phaseText = renderLandPhaseText(landLevel, l);
-        
+
         let needs = [];
         if (l.needWater) needs.push('水');
         if (l.needWeed) needs.push('草');
@@ -71,14 +62,13 @@ async function loadFarm() {
                 ${renderLandCropImage(l)}
                 <span class="plant-name">${l.plantName || '-'}</span>
                 <span class="phase-name">${phaseText}</span>
-                <span class="land-meta">${landTypeName}</span>
                 ${needs.length ? `<span class="needs">${needs.join(' ')}</span>` : ''}
             </div>`;
     }).join('');
     ensureMatureCountdownTimer();
-    
+
     const s = data.summary || {};
-    sum.textContent = `可收:${s.harvestable||0} 长:${s.growing||0} 空:${s.empty||0} 枯:${s.dead||0}`;
+    sum.textContent = `可收:${s.harvestable || 0} 长:${s.growing || 0} 空:${s.empty || 0} 枯:${s.dead || 0}`;
 }
 
 // 好友列表加载
@@ -90,11 +80,11 @@ async function loadFriends() {
     const list = await api('/api/friends');
     const wrap = $('friends-list');
     const summary = $('friend-summary');
-    
-    if (!list || !list.length) { 
+
+    if (!list || !list.length) {
         if (summary) summary.textContent = '共 0 名好友';
-        wrap.innerHTML = '<div style="padding:20px;text-align:center;color:#666">暂无好友或数据加载失败</div>'; 
-        return; 
+        wrap.innerHTML = '<div style="padding:20px;text-align:center;color:#666">暂无好友或数据加载失败</div>';
+        return;
     }
 
     if (summary) summary.textContent = `共 ${list.length} 名好友`;
@@ -107,12 +97,12 @@ async function loadFriends() {
         if (p.weedNum) info.push(`草${p.weedNum}`);
         if (p.insectNum) info.push(`虫${p.insectNum}`);
         const preview = info.length ? info.join(' ') : '无操作';
-        
+
         return `
             <div class="friend-item">
                 <div class="friend-header" onclick="toggleFriend('${f.gid}')">
                     <span class="name">${f.name}</span>
-                    <span class="preview ${info.length?'has-work':''}">${preview}</span>
+                    <span class="preview ${info.length ? 'has-work' : ''}">${preview}</span>
                 </div>
                 <div class="friend-actions">
                     <button class="btn btn-sm" onclick="friendQuickOp(event, '${f.gid}', 'steal')">一键偷取</button>
@@ -135,48 +125,39 @@ window.toggleFriend = async (gid) => {
         el.style.display = 'none';
         return;
     }
-    
+
     // 收起其他
     document.querySelectorAll('.friend-lands').forEach(e => e.style.display = 'none');
-    
+
     el.style.display = 'block';
-    
+
     const data = await api(`/api/friend/${gid}/lands`);
     if (!data || !data.lands) {
         el.innerHTML = '<div style="padding:10px;text-align:center;color:#F44336">加载失败</div>';
         return;
     }
-    
+
     const statusClass = { empty: 'empty', locked: 'empty', stealable: 'harvestable', harvested: 'empty', dead: 'dead', growing: 'growing' };
-    const landTypeNameMap = {
-        0: '未解锁',
-        1: '黄土地',
-        2: '红土地',
-        3: '黑土地',
-        4: '金土地'
-    };
     el.innerHTML = `
         <div class="farm-grid mini">
             ${data.lands.map(l => {
-                let cls = statusClass[l.status] || 'empty';
-                const landLevel = Number(l.level || 0);
-                const landLevelClass = `land-level-${Math.max(0, Math.min(4, landLevel))}`;
-                const landTypeName = landTypeNameMap[Math.max(0, Math.min(4, landLevel))] || '土地';
-                const phaseText = renderLandPhaseText(landLevel, l);
-                let needs = [];
-                if (l.needWater) needs.push('水');
-                if (l.needWeed) needs.push('草');
-                if (l.needBug) needs.push('虫');
-                return `
+        let cls = statusClass[l.status] || 'empty';
+        const landLevel = Number(l.level || 0);
+        const landLevelClass = `land-level-${Math.max(0, Math.min(4, landLevel))}`;
+        const phaseText = renderLandPhaseText(landLevel, l);
+        let needs = [];
+        if (l.needWater) needs.push('水');
+        if (l.needWeed) needs.push('草');
+        if (l.needBug) needs.push('虫');
+        return `
                     <div class="land-cell ${cls} ${landLevelClass}">
                         <span class="id">#${l.id}</span>
                         ${renderLandCropImage(l)}
                         <span class="plant-name">${l.plantName || '-'}</span>
                         <span class="phase-name">${phaseText}</span>
-                        <span class="land-meta">${landTypeName}</span>
                          ${needs.length ? `<span class="needs">${needs.join(' ')}</span>` : ''}
                     </div>`;
-            }).join('')}
+    }).join('')}
         </div>
     `;
     ensureMatureCountdownTimer();
@@ -204,29 +185,26 @@ window.friendQuickOp = async (event, gid, opType) => {
             const data = await api(`/api/friend/${gid}/lands`);
             if (data && data.lands) {
                 const statusClass = { empty: 'empty', locked: 'empty', stealable: 'harvestable', harvested: 'empty', dead: 'dead', growing: 'growing' };
-                const landTypeNameMap = { 0: '未解锁', 1: '黄土地', 2: '红土地', 3: '黑土地', 4: '金土地' };
                 landsEl.innerHTML = `
                     <div class="farm-grid mini">
                         ${data.lands.map(l => {
-                            const cls = statusClass[l.status] || 'empty';
-                            const landLevel = Number(l.level || 0);
-                            const landLevelClass = `land-level-${Math.max(0, Math.min(4, landLevel))}`;
-                            const landTypeName = landTypeNameMap[Math.max(0, Math.min(4, landLevel))] || '土地';
-                            const phaseText = renderLandPhaseText(landLevel, l);
-                            const needs = [];
-                            if (l.needWater) needs.push('水');
-                            if (l.needWeed) needs.push('草');
-                            if (l.needBug) needs.push('虫');
-                            return `
+                    const cls = statusClass[l.status] || 'empty';
+                    const landLevel = Number(l.level || 0);
+                    const landLevelClass = `land-level-${Math.max(0, Math.min(4, landLevel))}`;
+                    const phaseText = renderLandPhaseText(landLevel, l);
+                    const needs = [];
+                    if (l.needWater) needs.push('水');
+                    if (l.needWeed) needs.push('草');
+                    if (l.needBug) needs.push('虫');
+                    return `
                                 <div class="land-cell ${cls} ${landLevelClass}">
                                     <span class="id">#${l.id}</span>
                                     ${renderLandCropImage(l)}
                                     <span class="plant-name">${l.plantName || '-'}</span>
                                     <span class="phase-name">${phaseText}</span>
-                                    <span class="land-meta">${landTypeName}</span>
                                     ${needs.length ? `<span class="needs">${needs.join(' ')}</span>` : ''}
                                 </div>`;
-                        }).join('')}
+                }).join('')}
                     </div>
                 `;
                 ensureMatureCountdownTimer();
@@ -242,40 +220,40 @@ window.friendQuickOp = async (event, gid, opType) => {
 async function loadSeeds(preferredSeed) {
     if (seedLoadPromise) return seedLoadPromise;
     seedLoadPromise = (async () => {
-    const list = await api('/api/seeds');
-    const sel = $('seed-select');
-    sel.innerHTML = '<option value="0">自动选择 (按策略)</option>';
-    if (list && list.length) {
-        list.forEach(s => {
-            const o = document.createElement('option');
-            o.value = s.seedId;
-            const levelText = (s.requiredLevel === null || s.requiredLevel === undefined) ? 'Lv?' : `Lv${s.requiredLevel}`;
-            const priceText = (s.price === null || s.price === undefined) ? '价格未知' : `${s.price}金`;
-            let text = `${levelText} ${s.name} (${priceText})`;
-            if (s.locked) {
-                text += ' [未解锁]';
-                o.disabled = true;
-                o.style.color = '#666';
-            } else if (s.soldOut) {
-                text += ' [售罄]';
-                o.disabled = true;
-                o.style.color = '#666';
-            }
-            o.textContent = text;
-            sel.appendChild(o);
-        });
-    }
-    sel.dataset.loaded = '1';
-    if (preferredSeed !== undefined && preferredSeed !== null) {
-        const preferredVal = String(preferredSeed || 0);
-        if (preferredVal !== '0' && !Array.from(sel.options).some(opt => opt.value === preferredVal)) {
-            const fallbackOption = document.createElement('option');
-            fallbackOption.value = preferredVal;
-            fallbackOption.textContent = `种子${preferredVal} (当前不可购买/详情未知)`;
-            sel.appendChild(fallbackOption);
+        const list = await api('/api/seeds');
+        const sel = $('seed-select');
+        sel.innerHTML = '<option value="0">自动选择 (按策略)</option>';
+        if (list && list.length) {
+            list.forEach(s => {
+                const o = document.createElement('option');
+                o.value = s.seedId;
+                const levelText = (s.requiredLevel === null || s.requiredLevel === undefined) ? 'Lv?' : `Lv${s.requiredLevel}`;
+                const priceText = (s.price === null || s.price === undefined) ? '价格未知' : `${s.price}金`;
+                let text = `${levelText} ${s.name} (${priceText})`;
+                if (s.locked) {
+                    text += ' [未解锁]';
+                    o.disabled = true;
+                    o.style.color = '#666';
+                } else if (s.soldOut) {
+                    text += ' [售罄]';
+                    o.disabled = true;
+                    o.style.color = '#666';
+                }
+                o.textContent = text;
+                sel.appendChild(o);
+            });
         }
-        sel.value = preferredVal;
-    }
+        sel.dataset.loaded = '1';
+        if (preferredSeed !== undefined && preferredSeed !== null) {
+            const preferredVal = String(preferredSeed || 0);
+            if (preferredVal !== '0' && !Array.from(sel.options).some(opt => opt.value === preferredVal)) {
+                const fallbackOption = document.createElement('option');
+                fallbackOption.value = preferredVal;
+                fallbackOption.textContent = `种子${preferredVal} (当前不可购买/详情未知)`;
+                sel.appendChild(fallbackOption);
+            }
+            sel.value = preferredVal;
+        }
     })().finally(() => {
         seedLoadPromise = null;
     });
@@ -380,13 +358,15 @@ $('fertilizer-select').addEventListener('change', async () => {
     markAutomationPending('fertilizer');
 });
 
-['auto-farm', 'auto-farm-push', 'auto-land-upgrade', 'auto-friend', 'auto-task', 'auto-sell', 'auto-friend-steal', 'auto-friend-help', 'auto-friend-bad'].forEach((id, i) => {
+['auto-farm', 'auto-farm-push', 'auto-land-upgrade', 'auto-friend', 'auto-task', 'auto-daily-routine', 'auto-fertilizer-gift', 'auto-fertilizer-buy', 'auto-sell', 'auto-friend-steal', 'auto-friend-help', 'auto-friend-bad'].forEach((id, i) => {
     // 这里原来的 id 是数组里的元素，key 需要处理
     // id: auto-farm -> key: farm
     // id: auto-friend-steal -> key: friend_steal
-    const key = id.replace('auto-', '').replace(/-/g, '_');
+    const key = (id === 'auto-friend')
+        ? 'friend_help_exp_limit'
+        : id.replace('auto-', '').replace(/-/g, '_');
     const el = document.getElementById(id);
-    if(el) {
+    if (el) {
         el.addEventListener('change', async () => {
             if (id === 'auto-friend') {
                 updateFriendSubControlsState();
@@ -433,7 +413,7 @@ $('btn-save-settings').addEventListener('click', async () => {
     $('interval-farm-max').value = String(farmMax);
     $('interval-friend-min').value = String(friendMin);
     $('interval-friend-max').value = String(friendMax);
-    
+
     const saveBtn = $('btn-save-settings');
     if (saveBtn) saveBtn.disabled = true;
     try {
@@ -460,8 +440,15 @@ $('btn-save-settings').addEventListener('click', async () => {
             farm: !!$('auto-farm').checked,
             farm_push: !!$('auto-farm-push').checked,
             land_upgrade: !!$('auto-land-upgrade').checked,
-            friend: !!$('auto-friend').checked,
+            friend_help_exp_limit: !!$('auto-friend').checked,
             task: !!$('auto-task').checked,
+            email: !!$('auto-daily-routine').checked,
+            fertilizer_gift: !!$('auto-fertilizer-gift').checked,
+            fertilizer_buy: !!$('auto-fertilizer-buy').checked,
+            free_gifts: !!$('auto-daily-routine').checked,
+            share_reward: !!$('auto-daily-routine').checked,
+            vip_gift: !!$('auto-daily-routine').checked,
+            month_card: !!$('auto-daily-routine').checked,
             sell: !!$('auto-sell').checked,
             fertilizer: $('fertilizer-select').value,
             friend_steal: !!$('auto-friend-steal').checked,
@@ -477,6 +464,114 @@ $('btn-save-settings').addEventListener('click', async () => {
         if (saveBtn) saveBtn.disabled = false;
     }
 });
+
+const changeAdminPasswordBtn = document.getElementById('btn-change-admin-password');
+if (changeAdminPasswordBtn) {
+    changeAdminPasswordBtn.addEventListener('click', async () => {
+        const oldPwdEl = $('admin-old-password');
+        const newPwdEl = $('admin-new-password');
+        const newPwd2El = $('admin-new-password2');
+        const oldPwd = oldPwdEl ? oldPwdEl.value : '';
+        const newPwd = newPwdEl ? newPwdEl.value : '';
+        const newPwd2 = newPwd2El ? newPwd2El.value : '';
+        if (!oldPwd) {
+            alert('请输入当前管理密码');
+            if (oldPwdEl) oldPwdEl.focus();
+            return;
+        }
+        if (!newPwd) {
+            alert('请输入新密码');
+            if (newPwdEl) newPwdEl.focus();
+            return;
+        }
+        if (newPwd.length < 4) {
+            alert('新密码长度至少为 4 位');
+            if (newPwdEl) newPwdEl.focus();
+            return;
+        }
+        if (newPwd !== newPwd2) {
+            alert('两次输入的新密码不一致');
+            if (newPwd2El) newPwd2El.focus();
+            return;
+        }
+        changeAdminPasswordBtn.disabled = true;
+        try {
+            const r = await fetch(API_ROOT + '/api/admin/change-password', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-admin-token': adminToken,
+                },
+                body: JSON.stringify({ oldPassword: oldPwd, newPassword: newPwd }),
+            });
+            const j = await r.json().catch(() => null);
+            if (!r.ok || !j || !j.ok) {
+                const msg = (j && (j.error || j.message)) || '修改失败';
+                alert(msg);
+                return;
+            }
+            if (oldPwdEl) oldPwdEl.value = '';
+            if (newPwdEl) newPwdEl.value = '';
+            if (newPwd2El) newPwd2El.value = '';
+            alert('管理密码已更新，请牢记新密码');
+        } catch (e) {
+            alert('修改失败');
+        } finally {
+            changeAdminPasswordBtn.disabled = false;
+        }
+    });
+}
+
+const saveOfflineReminderBtn = document.getElementById('btn-save-offline-reminder');
+const PUSHOO_CHANNELS = new Set([
+    'webhook', 'qmsg', 'serverchan', 'pushplus', 'pushplushxtrip',
+    'dingtalk', 'wecom', 'bark', 'gocqhttp', 'onebot', 'atri',
+    'pushdeer', 'igot', 'telegram', 'feishu', 'ifttt', 'wecombot',
+    'discord', 'wxpusher',
+]);
+function syncOfflineReminderChannelUI() {
+    const channelEl = $('offline-reminder-channel');
+    const endpointEl = $('offline-reminder-endpoint');
+    if (!channelEl || !endpointEl) return;
+    const channel = String(channelEl.value || 'webhook').trim() || 'webhook';
+    const editable = channel === 'webhook';
+    endpointEl.disabled = !editable;
+}
+
+const offlineReminderChannelEl = document.getElementById('offline-reminder-channel');
+if (offlineReminderChannelEl) {
+    offlineReminderChannelEl.addEventListener('change', syncOfflineReminderChannelUI);
+    syncOfflineReminderChannelUI();
+}
+if (saveOfflineReminderBtn) {
+    saveOfflineReminderBtn.addEventListener('click', async () => {
+        const channel = String((($('offline-reminder-channel') || {}).value || 'webhook')).trim() || 'webhook';
+        const reloginUrlMode = String((($('offline-reminder-relogin-url-mode') || {}).value || 'none')).trim() || 'none';
+        const endpoint = String((($('offline-reminder-endpoint') || {}).value || '')).trim();
+        const token = String((($('offline-reminder-token') || {}).value || '')).trim();
+        const title = String((($('offline-reminder-title') || {}).value || '')).trim();
+        const msg = String((($('offline-reminder-msg') || {}).value || '')).trim();
+        let offlineDeleteSec = parseInt((($('offline-delete-seconds') || {}).value || ''), 10);
+        if (!Number.isFinite(offlineDeleteSec) || offlineDeleteSec < 1) offlineDeleteSec = 120;
+        const savePayload = { channel, reloginUrlMode, token, title, msg, offlineDeleteSec };
+        if (channel === 'webhook') {
+            if (endpoint) savePayload.endpoint = endpoint;
+        }
+
+        saveOfflineReminderBtn.disabled = true;
+        try {
+            const ret = await api('/api/settings/offline-reminder', 'POST', savePayload);
+            if (!ret) {
+                alert('保存下线提醒设置失败');
+                return;
+            }
+            if ($('offline-delete-seconds')) $('offline-delete-seconds').value = String(offlineDeleteSec);
+            alert('下线提醒设置已保存');
+        } finally {
+            saveOfflineReminderBtn.disabled = false;
+        }
+    });
+}
 
 // 加载额外设置
 async function loadSettings() {
@@ -508,8 +603,11 @@ async function loadSettings() {
             $('auto-farm').checked = !!auto.farm;
             $('auto-farm-push').checked = !!auto.farm_push;
             $('auto-land-upgrade').checked = !!auto.land_upgrade;
-            $('auto-friend').checked = !!auto.friend;
+            $('auto-friend').checked = !!auto.friend_help_exp_limit;
             $('auto-task').checked = !!auto.task;
+            $('auto-daily-routine').checked = !!(auto.email && auto.free_gifts && auto.share_reward && auto.vip_gift && auto.month_card);
+            $('auto-fertilizer-gift').checked = !!auto.fertilizer_gift;
+            $('auto-fertilizer-buy').checked = !!auto.fertilizer_buy;
             $('auto-sell').checked = !!auto.sell;
             $('auto-friend-steal').checked = !!auto.friend_steal;
             $('auto-friend-help').checked = !!auto.friend_help;
@@ -527,6 +625,25 @@ async function loadSettings() {
             localStorage.setItem(THEME_STORAGE_KEY, data.ui.theme);
             applyTheme(data.ui.theme);
         }
+        const reminder = (data.offlineReminder && typeof data.offlineReminder === 'object') ? data.offlineReminder : {};
+        const savedChannel = String(reminder.channel || '').trim().toLowerCase();
+        if ($('offline-reminder-channel')) {
+            $('offline-reminder-channel').value = PUSHOO_CHANNELS.has(savedChannel) ? savedChannel : 'webhook';
+        }
+        const reloginUrlMode = String(reminder.reloginUrlMode || 'none').trim();
+        if ($('offline-reminder-relogin-url-mode')) {
+            const reloginUrlModeEl = $('offline-reminder-relogin-url-mode');
+            const allow = new Set(['none', 'qq_link', 'qr_link']);
+            reloginUrlModeEl.value = allow.has(reloginUrlMode) ? reloginUrlMode : 'none';
+        }
+        if ($('offline-reminder-endpoint')) {
+            $('offline-reminder-endpoint').value = String(reminder.endpoint || '').trim();
+        }
+        syncOfflineReminderChannelUI();
+        if ($('offline-reminder-token')) $('offline-reminder-token').value = String(reminder.token || '');
+        if ($('offline-reminder-title')) $('offline-reminder-title').value = String(reminder.title || '账号下线提醒');
+        if ($('offline-reminder-msg')) $('offline-reminder-msg').value = String(reminder.msg || '账号下线');
+        if ($('offline-delete-seconds')) $('offline-delete-seconds').value = String(Number(reminder.offlineDeleteSec || 120));
         const enabled = !!$('friend-quiet-enabled').checked;
         $('friend-quiet-start').disabled = !enabled;
         $('friend-quiet-end').disabled = !enabled;
@@ -566,58 +683,165 @@ async function loadBag() {
     }
     listEl.innerHTML = displayItems.map(it => `
       <div class="bag-item">
-        <div class="thumb-wrap ${it.image ? '' : 'fallback'}">
-          ${it.image
-            ? `<img class="bag-thumb" src="${escapeHtml(String(it.image))}" alt="${escapeHtml(String(it.name || '物品'))}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'; this.closest('.thumb-wrap').classList.add('fallback')">`
-            : ''}
-          <span class="bag-thumb-fallback">${escapeHtml(String((it.name || '物').slice(0, 1)))}</span>
+        <div class="bag-top">
+          <div class="thumb-wrap ${it.image ? '' : 'fallback'}">
+            ${it.image
+              ? `<img class="bag-thumb" src="${escapeHtml(String(it.image))}" alt="${escapeHtml(String(it.name || '物品'))}" loading="lazy" referrerpolicy="no-referrer" onerror="this.style.display='none'; this.closest('.thumb-wrap').classList.add('fallback')">`
+              : ''}
+            <span class="bag-thumb-fallback">${escapeHtml(String((it.name || '物').slice(0, 1)))}</span>
+          </div>
+          ${it.hoursText
+              ? `<div class="count bag-count-right" style="color:var(--primary)">${escapeHtml(String(it.hoursText))}</div>`
+              : `<div class="count bag-count-right">x${Number(it.count || 0)}</div>`}
         </div>
         <div class="name">${escapeHtml(String(it.name || ('物品' + (it.id || ''))))}</div>
         <div class="meta">ID: ${Number(it.id || 0)}${it.uid ? ` · UID: ${Number(it.uid)}` : ''}</div>
         <div class="meta">类型: ${Number(it.itemType || 0)}${Number(it.level || 0) > 0 ? ` · 等级: ${Number(it.level)}` : ''}${Number(it.price || 0) > 0 ? ` · 价格: ${Number(it.price)}` : ''}</div>
-        ${it.hoursText
-            ? `<div class="count" style="color:var(--primary)">${escapeHtml(String(it.hoursText))}</div>`
-            : `<div class="count">x${Number(it.count || 0)}</div>`}
       </div>
     `).join('');
 }
 
+async function loadDailyGifts() {
+    const listEl = $('daily-gifts-list');
+    const sumEl = $('daily-gifts-summary');
+    const growthListEl = $('growth-task-list');
+    const growthFillEl = $('growth-task-fill');
+    if (!listEl || !sumEl || !growthListEl || !growthFillEl) return;
+    if (!currentAccountId) {
+        sumEl.textContent = '请选择账号';
+        listEl.innerHTML = '<div class="op-stat"><span class="label"><i class="fas fa-info-circle"></i> 暂无账号</span><span class="count">--</span></div>';
+        growthFillEl.style.width = '0%';
+        growthListEl.innerHTML = '<div class="growth-task-row"><span class="growth-task-name"><i class="fas fa-info-circle"></i> 暂无账号</span><span class="growth-task-status">--</span></div>';
+        return;
+    }
+    growthFillEl.style.width = '0%';
+    sumEl.textContent = '加载中...';
+    const data = await api('/api/daily-gifts');
+    const growth = (data && data.growth && typeof data.growth === 'object') ? data.growth : null;
+    const growthTasks = growth && Array.isArray(growth.tasks) ? growth.tasks : [];
+    const growthCompleted = Number(growth && growth.completedCount || 0);
+    const growthTotal = Number(growth && growth.totalCount || 0);
+    let growthPct = 0;
+    if (growthTasks.length > 0) {
+        let sumProgress = 0;
+        let sumTotal = 0;
+        for (const t of growthTasks) {
+            const progress = Math.max(0, Number(t && t.progress || 0));
+            const total = Math.max(0, Number(t && t.totalProgress || 0));
+            if (total > 0) {
+                sumProgress += Math.min(progress, total);
+                sumTotal += total;
+            }
+        }
+        if (sumTotal > 0) growthPct = Math.max(0, Math.min(100, (sumProgress / sumTotal) * 100));
+    }
+    if (growthPct <= 0 && growthTotal > 0) {
+        // 兜底：无明细 total 时沿用完成数量口径
+        growthPct = Math.max(0, Math.min(100, (growthCompleted / growthTotal) * 100));
+    }
+    growthFillEl.style.width = `${growthPct}%`;
+    if (!growthTasks.length) {
+        growthListEl.innerHTML = '<div class="growth-task-row"><span class="growth-task-name"><i class="fas fa-info-circle"></i> 暂无数据</span><span class="growth-task-status">--</span></div>';
+    } else {
+        growthListEl.innerHTML = growthTasks.map((t) => {
+            const progress = Math.max(0, Number(t && t.progress || 0));
+            const total = Math.max(0, Number(t && t.totalProgress || 0));
+            const isUnlocked = !!(t && t.isUnlocked);
+            const isCompleted = !!(t && t.isCompleted);
+            const status = isUnlocked ? (total > 0 ? `${progress}/${total}` : (isCompleted ? '✓' : '✕')) : '-';
+            const cls = isUnlocked ? (isCompleted ? 'color:var(--ok)' : '') : 'opacity:.65';
+            return `<div class="growth-task-row"><span class="growth-task-name"><i class="fas fa-seedling"></i>${escapeHtml(String((t && t.desc) || '成长任务'))}</span><span class="growth-task-status" style="${cls}">${status}</span></div>`;
+        }).join('');
+    }
+
+    const gifts = (data && Array.isArray(data.gifts)) ? data.gifts : [];
+    const doneCount = gifts.filter(g => !!g.doneToday).length;
+    sumEl.textContent = `今日完成 ${doneCount}/${gifts.length || 0}`;
+    if (!gifts.length) {
+        listEl.innerHTML = '<div class="op-stat"><span class="label"><i class="fas fa-info-circle"></i> 暂无数据</span><span class="count">--</span></div>';
+        return;
+    }
+    const rows = gifts.map((g) => {
+        let status = g.doneToday ? '✓' : (g.enabled ? '✕' : '-');
+        if (g.key === 'task_claim') {
+            const done = Math.max(0, Number(g.completedCount || 0));
+            const total = Math.max(1, Number(g.totalCount || 3));
+            status = `${done}/${total}`;
+        }
+        if (g.key === 'fertilizer_buy' && !g.doneToday && g.pausedNoGoldToday) status = '点券不足暂停';
+        const cls = g.key === 'task_claim'
+            ? ((Number(g.completedCount || 0) >= Number(g.totalCount || 3)) ? 'color:var(--ok)' : '')
+            : (g.doneToday ? 'color:var(--ok)' : (g.enabled ? '' : 'opacity:.65'));
+        return `<div class="op-stat"><span class="label"><i class="fas fa-gift"></i>${g.label || g.key}</span><span class="count" style="${cls}">${status}</span></div>`;
+    });
+    listEl.innerHTML = rows.join('');
+}
+
 // ============ UI 交互 ============
+function activatePage(pageName) {
+    const target = String(pageName || '').trim();
+    if (!target) return;
+    document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+
+    const nav = document.querySelector(`.nav-item[data-page="${target}"]`);
+    if (nav) nav.classList.add('active');
+    const page = document.getElementById('page-' + target);
+    if (page) page.classList.add('active');
+
+    const titleEl = $('page-title');
+    if (titleEl) {
+        if (nav) titleEl.textContent = nav.textContent.trim();
+        else {
+            const fallbackMap = {
+                dashboard: '概览',
+                personal: '个人',
+                friends: '好友',
+                accounts: '账号',
+                analytics: '分析',
+                settings: '设置',
+            };
+            titleEl.textContent = fallbackMap[target] || '概览';
+        }
+    }
+
+    if (target === 'dashboard') renderOpsList(lastOperationsData);
+    if (target === 'personal') {
+        loadDailyGifts();
+        loadBag();
+        loadFarm();
+    }
+    if (target === 'friends') loadFriends();
+    if (target === 'analytics') loadAnalytics();
+    if (target === 'settings') loadSettings();
+    if (target === 'accounts') {
+        renderAccountManager();
+        pollAccountLogs();
+    }
+}
+
 // 导航切换
 document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', e => {
         e.preventDefault();
-        document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-        document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-        item.classList.add('active');
-        const pageId = 'page-' + item.dataset.page;
-        const page = document.getElementById(pageId);
-        if (page) page.classList.add('active');
-        
-        $('page-title').textContent = item.textContent.trim();
-        if (item.dataset.page === 'dashboard') renderOpsList(lastOperationsData);
-        
-        if (item.dataset.page === 'farm') loadFarm();
-        if (item.dataset.page === 'bag') loadBag();
-        if (item.dataset.page === 'friends') loadFriends();
-        if (item.dataset.page === 'analytics') loadAnalytics();
-        if (item.dataset.page === 'settings') loadSettings();
-        if (item.dataset.page === 'accounts') {
-            renderAccountManager();
-            pollAccountLogs();
-        }
+        activatePage(item.dataset.page);
     });
 });
+
+const goAnalyticsBtn = $('btn-go-analytics');
+if (goAnalyticsBtn) {
+    goAnalyticsBtn.addEventListener('click', () => activatePage('analytics'));
+}
 
 // 数据分析
 async function loadAnalytics() {
     const container = $('analytics-list');
     if (!container) return;
     container.innerHTML = '<div style="padding:20px;text-align:center;color:#888"><i class="fas fa-spinner fa-spin"></i> 加载中...</div>';
-    
+
     const sort = $('analytics-sort').value;
     const list = await api(`/api/analytics?sort=${sort}`);
-    
+
     if (!list || !list.length) {
         container.innerHTML = '<div style="padding:24px;text-align:center;color:#666;font-size:16px">暂无数据</div>';
         return;
@@ -642,7 +866,7 @@ async function loadAnalytics() {
             return bv - av;
         });
     }
-    
+
     // 表格头
     let html = `
     <table style="width:100%;border-collapse:collapse;color:var(--text-main)">
@@ -658,7 +882,7 @@ async function loadAnalytics() {
         </thead>
         <tbody>
     `;
-    
+
     list.forEach((item, index) => {
         const lvText = (item.level === null || item.level === undefined || item.level === '' || Number(item.level) < 0)
             ? '未知'
@@ -677,7 +901,7 @@ async function loadAnalytics() {
             </tr>
         `;
     });
-    
+
     html += '</tbody></table>';
     container.innerHTML = html;
 }
@@ -735,6 +959,7 @@ async function pollAccountLogs() {
                 update: '更新',
                 delete: '删除',
                 kickout_delete: '踢下线删除',
+                ws_400: '登录失效',
             };
             const action = actionMap[l.action] || l.action || '操作';
             const timeStr = ((l.time || '').split(' ')[1] || (l.time || ''));

@@ -1,0 +1,12 @@
+services:
+  qq-farm-bot-ui:
+    build: .
+    container_name: qq-farm-bot-ui
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - ADMIN_PASSWORD=admin
+      - TZ=Asia/Shanghai
+    volumes:
+      - ./data:/app/data

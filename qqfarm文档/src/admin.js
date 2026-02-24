@@ -13,6 +13,8 @@ const { QRLoginSession, MiniProgramLoginSession } = require('./qrlogin');
 const { CookieUtils } = require('./qrutils');
 const { getResourcePath } = require('./runtime-paths');
 
+const hashPassword = (pwd) => crypto.createHash('sha256').update(String(pwd || '')).digest('hex');
+
 let app = null;
 let server = null;
 let provider = null; // DataProvider
@@ -44,17 +46,22 @@ function startAdminServer(dataProvider) {
         next();
     });
 
-    const disableWebUI = !!CONFIG.disableWebUI;
-    const panelDir = disableWebUI ? '' : getResourcePath('panel');
-    if (!disableWebUI) {
-        app.use(express.static(panelDir));
-        app.use('/game-config', express.static(getResourcePath('gameConfig')));
-    }
+    const panelDir = getResourcePath('panel');
+    app.use(express.static(panelDir));
+    app.use('/game-config', express.static(getResourcePath('gameConfig')));
 
     // 登录与鉴权
     app.post('/api/login', (req, res) => {
         const { password } = req.body || {};
-        if (String(password || '') !== String(CONFIG.adminPassword || '')) {
+        const input = String(password || '');
+        const storedHash = store.getAdminPasswordHash ? store.getAdminPasswordHash() : '';
+        let ok = false;
+        if (storedHash) {
+            ok = hashPassword(input) === storedHash;
+        } else {
+            ok = input === String(CONFIG.adminPassword || '');
+        }
+        if (!ok) {
             return res.status(401).json({ ok: false, error: 'Invalid password' });
         }
         const token = issueToken();
@@ -65,6 +72,27 @@ function startAdminServer(dataProvider) {
     app.use('/api', (req, res, next) => {
         if (req.path === '/login' || req.path === '/qr/create' || req.path === '/qr/check') return next();
         return authRequired(req, res, next);
+    });
+
+    app.post('/api/admin/change-password', (req, res) => {
+        const body = req.body || {};
+        const oldPassword = String(body.oldPassword || '');
+        const newPassword = String(body.newPassword || '');
+        if (newPassword.length < 4) {
+            return res.status(400).json({ ok: false, error: '新密码长度至少为 4 位' });
+        }
+        const storedHash = store.getAdminPasswordHash ? store.getAdminPasswordHash() : '';
+        const ok = storedHash
+            ? hashPassword(oldPassword) === storedHash
+            : oldPassword === String(CONFIG.adminPassword || '');
+        if (!ok) {
+            return res.status(400).json({ ok: false, error: '原密码错误' });
+        }
+        const nextHash = hashPassword(newPassword);
+        if (store.setAdminPasswordHash) {
+            store.setAdminPasswordHash(nextHash);
+        }
+        res.json({ ok: true });
     });
 
     app.get('/api/ping', (req, res) => {
@@ -84,7 +112,7 @@ function startAdminServer(dataProvider) {
     app.get('/api/status', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.json({ ok: false, error: 'Missing x-account-id' });
-        
+
         try {
             const data = provider.getStatus(id);
             res.json({ ok: true, data });
@@ -179,12 +207,12 @@ function startAdminServer(dataProvider) {
         }
     });
 
-    // API: 手动出售（调试）
-    app.post('/api/sell/debug', async (req, res) => {
+    // API: 每日礼包状态总览
+    app.get('/api/daily-gifts', async (req, res) => {
         const id = getAccId(req);
         if (!id) return res.status(400).json({ ok: false });
         try {
-            const data = await provider.debugSellFruits(id);
+            const data = await provider.getDailyGifts(id);
             res.json({ ok: true, data });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
@@ -258,6 +286,17 @@ function startAdminServer(dataProvider) {
         }
     });
 
+    // API: 保存下线提醒配置
+    app.post('/api/settings/offline-reminder', async (req, res) => {
+        try {
+            const body = (req.body && typeof req.body === 'object') ? req.body : {};
+            const data = store.setOfflineReminder ? store.setOfflineReminder(body) : {};
+            res.json({ ok: true, data: data || {} });
+        } catch (e) {
+            res.status(500).json({ ok: false, error: e.message });
+        }
+    });
+
     // API: 获取配置
     app.get('/api/settings', async (req, res) => {
         try {
@@ -269,7 +308,10 @@ function startAdminServer(dataProvider) {
             const friendQuietHours = store.getFriendQuietHours(id);
             const automation = store.getAutomation(id);
             const ui = store.getUI();
-            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, ui } });
+            const offlineReminder = store.getOfflineReminder
+                ? store.getOfflineReminder()
+                : { channel: 'webhook', reloginUrlMode: 'none', endpoint: '', token: '', title: '账号下线提醒', msg: '账号下线', offlineDeleteSec: 120 };
+            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, ui, offlineReminder } });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
         }
@@ -284,10 +326,15 @@ function startAdminServer(dataProvider) {
             res.status(500).json({ ok: false, error: e.message });
         }
     });
-    
+
     app.post('/api/accounts', (req, res) => {
         try {
             const isUpdate = !!req.body.id;
+            let wasRunning = false;
+            if (isUpdate && provider.isAccountRunning) {
+                wasRunning = provider.isAccountRunning(req.body.id);
+            }
+
             const data = addOrUpdateAccount(req.body);
             if (provider.addAccountLog) {
                 const accountId = isUpdate ? String(req.body.id) : String((data.accounts[data.accounts.length - 1] || {}).id || '');
@@ -299,22 +346,20 @@ function startAdminServer(dataProvider) {
                     accountName
                 );
             }
-            // 如果是新增或修改 Code，重启 worker?
-            if (req.body.id) {
-                // provider.restartAccount(req.body.id); // TODO: implement restart
-                provider.stopAccount(req.body.id);
-                provider.startAccount(req.body.id);
-            } else {
-                // 新增
+            // 如果是新增，自动启动
+            if (!isUpdate) {
                 const newAcc = data.accounts[data.accounts.length - 1];
-                provider.startAccount(newAcc.id);
+                if (newAcc) provider.startAccount(newAcc.id);
+            } else if (wasRunning) {
+                // 如果是更新，且之前在运行，则重启
+                provider.restartAccount(req.body.id);
             }
             res.json({ ok: true, data });
         } catch (e) {
             res.status(500).json({ ok: false, error: e.message });
         }
     });
-    
+
     app.delete('/api/accounts/:id', (req, res) => {
         try {
             const before = provider.getAccounts();
@@ -404,22 +449,13 @@ function startAdminServer(dataProvider) {
         }
     });
 
-
-    if (disableWebUI) {
-        app.get('/', (req, res) => {
-            res.status(404).json({ ok: false, error: 'WebUI disabled' });
-        });
-    } else {
-        app.get('/', (req, res) => {
-            res.sendFile(path.join(panelDir, 'index.html'));
-        });
-    }
+    app.get('/', (req, res) => {
+        res.sendFile(path.join(panelDir, 'index.html'));
+    });
 
     const port = CONFIG.adminPort || 3000;
-    const host = CONFIG.adminHost || '127.0.0.1';
-    server = app.listen(port, host, () => {
-        const uiStatus = disableWebUI ? ' (WebUI disabled)' : '';
-        console.log(`[管理服务] http://${host}:${port}${uiStatus}`);
+    server = app.listen(port, '0.0.0.0', () => {
+        console.log(`[管理面板] http://localhost:${port}`);
     });
 }
 

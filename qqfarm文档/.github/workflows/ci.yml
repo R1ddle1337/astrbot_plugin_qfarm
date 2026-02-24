@@ -1,0 +1,39 @@
+name: ci
+
+# https://help.github.com/en/articles/workflow-syntax-for-github-actions#on
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install
+        run: npm install
+      - name: build
+        run: npm run build:release
+      - name: Upload Windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: farm-win-x64
+          path: ./dist/farm-win-x64.exe
+      - name: Upload Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: farm-linux-x64
+          path: ./dist/farm-linux-x64
+      - name: Upload MacOS Intel
+        uses: actions/upload-artifact@v4
+        with:
+          name: farm-mac-x64
+          path: ./dist/farm-macos-x64
+      - name: Upload MacOS Apple Silicon
+        uses: actions/upload-artifact@v4
+        with:
+          name: farm-mac-arm64
+          path: ./dist/farm-macos-arm64

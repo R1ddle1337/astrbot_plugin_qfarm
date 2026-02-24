@@ -5,7 +5,7 @@
 const protobuf = require('protobufjs');
 const { CONFIG, PlantPhase, PHASE_NAMES } = require('./config');
 const { types } = require('./proto');
-const { sendMsgAsync, getUserState, networkEvents } = require('./network');
+const { sendMsgAsync, getUserState, networkEvents, getWsErrorState } = require('./network');
 const { toLong, toNum, getServerTimeSec, toTimeSec, log, logWarn, sleep } = require('./utils');
 const { recordOperation } = require('./stats');
 const { getPlantNameBySeedId, getPlantName, getPlantExp, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantById, getSeedImageBySeedId } = require('./gameConfig');
@@ -314,7 +314,10 @@ async function getAvailableSeeds() {
             }
         }
     } catch (e) {
-        logWarn('商店', `获取商店失败: ${e.message}，使用本地备选列表`);
+        const wsErr = getWsErrorState();
+        if (!wsErr || Number(wsErr.code) !== 400) {
+            logWarn('商店', `获取商店失败: ${e.message}，使用本地备选列表`);
+        }
     }
 
     // 如果商店请求失败或为空，使用本地配置

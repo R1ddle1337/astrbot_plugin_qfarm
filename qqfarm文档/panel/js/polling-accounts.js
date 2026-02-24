@@ -1,4 +1,5 @@
 const CURRENT_ACCOUNT_STORAGE_KEY = 'currentAccountId';
+const wsErrorNotifiedAt = {};
 
 async function loadAccounts() {
     return runDedupedRequest('loadAccounts', async () => {
@@ -30,7 +31,11 @@ async function loadAccounts() {
                 updateTopbarAccount(accounts.find(a => a.id === currentAccountId) || null);
                 if (!hasCurrent && prevCurrentId) {
                     // 当前账号被删除后，农场/好友页数据立即切换到新账号
-                    if ($('page-farm').classList.contains('active')) loadFarm();
+                    if ($('page-personal').classList.contains('active')) {
+                        loadDailyGifts();
+                        loadBag();
+                        loadFarm();
+                    }
                     if ($('page-friends').classList.contains('active')) loadFriends();
                 }
             }
@@ -47,7 +52,7 @@ function renderAccountSelector() {
             ${acc.running ? '<span class="dot online"></span>' : '<span class="dot offline"></span>'}
         </div>
     `).join('');
-    
+
     dropdown.querySelectorAll('.account-option').forEach(el => {
         el.addEventListener('click', () => {
             switchAccount(el.dataset.id);
@@ -78,8 +83,11 @@ function switchAccount(id) {
     pollFertilizerBuckets(true);
     pollLogs();
     Promise.resolve(loadSettings()).catch(() => null);
-    if ($('page-farm').classList.contains('active')) loadFarm();
-    if ($('page-bag').classList.contains('active')) loadBag();
+    if ($('page-personal').classList.contains('active')) {
+        loadDailyGifts();
+        loadBag();
+        loadFarm();
+    }
     if ($('page-friends').classList.contains('active')) loadFriends();
 }
 
@@ -176,7 +184,7 @@ function buildLogRowHtml(l) {
     const eventKey = (l.meta && l.meta.event) ? String(l.meta.event) : '';
     const eventLabel = LOG_EVENT_LABELS[eventKey] || '';
     const ev = eventLabel ? `[${eventLabel}]` : '';
-    return `<div class="log-row ${l.isWarn?'warn':''}">
+    return `<div class="log-row ${l.isWarn ? 'warn' : ''}">
         <span class="log-time">${escapeHtml(timeStr)}</span>
         <span class="log-tag">[${escapeHtml(moduleLabel)}]</span>
         <span class="log-msg">${escapeHtml(`${name}${ev} ${l.msg}`)}</span>
@@ -246,7 +254,7 @@ async function pollStatus(options = {}) {
     const key = `pollStatus:${currentAccountId}`;
     return runDedupedRequest(key, async () => {
         const data = await api('/api/status');
-        
+
         if (!data) {
             $('conn-text').textContent = '未连接';
             $('conn-dot').className = 'dot offline';
@@ -261,130 +269,142 @@ async function pollStatus(options = {}) {
             return;
         }
 
-    const isConnected = data.connection?.connected;
-    const statusRevision = Number(data.configRevision || 0);
-    if (statusRevision > latestConfigRevision) latestConfigRevision = statusRevision;
-    if (expectedConfigRevision > 0 && statusRevision >= expectedConfigRevision) {
-        pendingAutomationKeys.clear();
-    }
-    $('conn-text').textContent = isConnected ? '运行中' : '未连接';
-    $('conn-dot').className = 'dot ' + (isConnected ? 'online' : 'offline');
-
-    // Stats
-    $('level').textContent = data.status?.level ? 'Lv' + data.status.level : '-';
-    
-    updateValueWithAnim('gold', String(data.status?.gold ?? '-'), 'value-changed-gold');
-    updateValueWithAnim('coupon', String(data.status?.coupon ?? 0));
-    pollFertilizerBuckets();
-    
-    if (data.uptime !== undefined) {
-        lastServerUptime = data.uptime;
-        lastSyncTimestamp = Date.now();
-        updateUptimeDisplay();
-    }
-
-    if (nextCheckSyncPending) {
-        const farmRemain = toSafeNumber(data.nextChecks?.farmRemainSec, NaN);
-        const friendRemain = toSafeNumber(data.nextChecks?.friendRemainSec, NaN);
-        localNextFarmRemainSec = Number.isFinite(farmRemain) ? Math.max(0, Math.floor(farmRemain)) : NaN;
-        localNextFriendRemainSec = Number.isFinite(friendRemain) ? Math.max(0, Math.floor(friendRemain)) : NaN;
-        renderLocalNextChecks();
-        nextCheckSyncPending = false;
-    }
-    
-    // Exp
-    const ep = data.expProgress;
-    if (ep && ep.needed > 0) {
-        const pct = Math.min(100, (ep.current / ep.needed) * 100);
-        $('exp-fill').style.width = pct + '%';
-        $('exp-num').textContent = ep.current + '/' + ep.needed;
-    }
-
-    // Session Gains & History
-    const expGain = toSafeNumber(data.sessionExpGained, 0);
-    const goldGain = toSafeNumber(data.sessionGoldGained, 0);
-    const couponGain = toSafeNumber(data.sessionCouponGained, 0);
-    
-    // stat-exp 显示会话总增量
-    updateValueWithAnim('stat-exp', (expGain >= 0 ? '+' : '') + Math.floor(expGain));
-    updateValueWithAnim('stat-gold', (goldGain >= 0 ? '+' : '') + Math.floor(goldGain), 'value-changed-gold');
-    const goldGainEl = $('stat-gold');
-    if (goldGainEl) {
-        goldGainEl.classList.toggle('negative', goldGain < 0);
-    }
-    updateValueWithAnim('stat-coupon', (couponGain >= 0 ? '+' : '') + Math.floor(couponGain));
-    const couponGainEl = $('stat-coupon');
-    if (couponGainEl) {
-        couponGainEl.classList.toggle('negative', couponGain < 0);
-    }
-    
-    // 记录历史数据用于图表 (每分钟记录一次)
-    const now = new Date();
-    const timeLabel = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
-    if (expHistory.length === 0 || expHistory[expHistory.length - 1].time !== timeLabel) {
-        expHistory.push({ time: timeLabel, exp: expGain, ts: now.getTime() });
-        if (expHistory.length > 60) expHistory.shift();
-    }
-
-    // 效率计算 (每10秒更新一次)
-    if (Date.now() - lastRateUpdate > 10000) {
-        lastRateUpdate = Date.now();
-        if (data.uptime > 0) { // 只要运行时间大于0就显示
-            const hours = data.uptime / 3600;
-            const finalRatePerHour = hours > 0 ? (expGain / hours) : 0;
-            const rateDisplay = Math.floor(finalRatePerHour) + '/时';
-            $('exp-rate').textContent = rateDisplay;
-            
-            // 预计升级
-            if (data.expProgress && data.expProgress.needed > 0 && finalRatePerHour > 0) {
-                // 计算还需要多少经验
-                const expNeeded = data.expProgress.needed - data.expProgress.current;
-                if (expNeeded > 0) {
-                    const minsToLevel = expNeeded / (finalRatePerHour / 60);
-                    if (minsToLevel < 60) {
-                        $('time-to-level').textContent = `约 ${Math.ceil(minsToLevel)} 分钟升级`;
-                    } else {
-                        $('time-to-level').textContent = `约 ${(minsToLevel/60).toFixed(1)} 小时升级`;
-                    }
-                } else {
-                    $('time-to-level').textContent = '即将升级';
-                }
-            } else if (finalRatePerHour <= 0) {
-                $('time-to-level').textContent = '等待收益...';
-            }
-        } else {
-            $('exp-rate').textContent = '等待数据...';
-            $('time-to-level').textContent = '';
+        const isConnected = data.connection?.connected;
+        const statusRevision = Number(data.configRevision || 0);
+        if (statusRevision > latestConfigRevision) latestConfigRevision = statusRevision;
+        if (expectedConfigRevision > 0 && statusRevision >= expectedConfigRevision) {
+            pendingAutomationKeys.clear();
         }
-    }
+        $('conn-text').textContent = isConnected ? '运行中' : '未连接';
+        $('conn-dot').className = 'dot ' + (isConnected ? 'online' : 'offline');
 
-    // Automation Switches
-    const auto = data.automation || {};
-    if (!pendingAutomationKeys.has('farm')) $('auto-farm').checked = !!auto.farm;
-    if (!pendingAutomationKeys.has('farm_push')) $('auto-farm-push').checked = !!auto.farm_push;
-    if (!pendingAutomationKeys.has('land_upgrade')) $('auto-land-upgrade').checked = !!auto.land_upgrade;
-    if (!pendingAutomationKeys.has('friend')) $('auto-friend').checked = !!auto.friend;
-    if (!pendingAutomationKeys.has('task')) $('auto-task').checked = !!auto.task;
-    if (!pendingAutomationKeys.has('sell')) $('auto-sell').checked = !!auto.sell;
-    
-    // 只有当用户没有正在操作时才更新下拉框，避免打断用户
-    if (!pendingAutomationKeys.has('fertilizer') && document.activeElement !== $('fertilizer-select') && auto.fertilizer) {
-        $('fertilizer-select').value = auto.fertilizer;
-    }
-    
-    // 好友细分开关
-    if (!pendingAutomationKeys.has('friend_steal')) $('auto-friend-steal').checked = !!auto.friend_steal;
-    if (!pendingAutomationKeys.has('friend_help')) $('auto-friend-help').checked = !!auto.friend_help;
-    if (!pendingAutomationKeys.has('friend_bad')) $('auto-friend-bad').checked = !!auto.friend_bad;
-    updateFriendSubControlsState();
+        const wsError = data.wsError || null;
+        if (wsError && Number(wsError.code) === 400 && currentAccountId) {
+            const errAt = Number(wsError.at) || 0;
+            const lastNotified = Number(wsErrorNotifiedAt[currentAccountId] || 0);
+            if (errAt && errAt > lastNotified) {
+                wsErrorNotifiedAt[currentAccountId] = errAt;
+                if (typeof editAccount === 'function') {
+                    editAccount(currentAccountId);
+                }
+            }
+        }
 
-    // Operations Stats
-    const opsPayload = (data.operations && typeof data.operations === 'object')
-        ? data.operations
-        : lastOperationsData;
-    renderOpsList(opsPayload || {});
+        // Stats
+        $('level').textContent = data.status?.level ? 'Lv' + data.status.level : '-';
 
-    // Seed Pref
+        updateValueWithAnim('gold', String(data.status?.gold ?? '-'), 'value-changed-gold');
+        updateValueWithAnim('coupon', String(data.status?.coupon ?? 0));
+        pollFertilizerBuckets();
+
+        if (data.uptime !== undefined) {
+            lastServerUptime = data.uptime;
+            lastSyncTimestamp = Date.now();
+            updateUptimeDisplay();
+        }
+
+        if (nextCheckSyncPending) {
+            const farmRemain = toSafeNumber(data.nextChecks?.farmRemainSec, NaN);
+            const friendRemain = toSafeNumber(data.nextChecks?.friendRemainSec, NaN);
+            localNextFarmRemainSec = Number.isFinite(farmRemain) ? Math.max(0, Math.floor(farmRemain)) : NaN;
+            localNextFriendRemainSec = Number.isFinite(friendRemain) ? Math.max(0, Math.floor(friendRemain)) : NaN;
+            renderLocalNextChecks();
+            nextCheckSyncPending = false;
+        }
+
+        // Exp
+        const ep = data.expProgress;
+        if (ep && ep.needed > 0) {
+            const pct = Math.min(100, (ep.current / ep.needed) * 100);
+            $('exp-fill').style.width = pct + '%';
+            $('exp-num').textContent = ep.current + '/' + ep.needed;
+        }
+
+        // Session Gains & History
+        const expGain = toSafeNumber(data.sessionExpGained, 0);
+        const goldGain = toSafeNumber(data.sessionGoldGained, 0);
+        const couponGain = toSafeNumber(data.sessionCouponGained, 0);
+
+        // stat-exp 显示会话总增量
+        updateValueWithAnim('stat-exp', (expGain >= 0 ? '+' : '') + Math.floor(expGain));
+        updateValueWithAnim('stat-gold', (goldGain >= 0 ? '+' : '') + Math.floor(goldGain), 'value-changed-gold');
+        const goldGainEl = $('stat-gold');
+        if (goldGainEl) {
+            goldGainEl.classList.toggle('negative', goldGain < 0);
+        }
+        updateValueWithAnim('stat-coupon', (couponGain >= 0 ? '+' : '') + Math.floor(couponGain));
+        const couponGainEl = $('stat-coupon');
+        if (couponGainEl) {
+            couponGainEl.classList.toggle('negative', couponGain < 0);
+        }
+
+        // 记录历史数据用于图表 (每分钟记录一次)
+        const now = new Date();
+        const timeLabel = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`;
+        if (expHistory.length === 0 || expHistory[expHistory.length - 1].time !== timeLabel) {
+            expHistory.push({ time: timeLabel, exp: expGain, ts: now.getTime() });
+            if (expHistory.length > 60) expHistory.shift();
+        }
+
+        // 效率计算 (每10秒更新一次)
+        if (Date.now() - lastRateUpdate > 10000) {
+            lastRateUpdate = Date.now();
+            if (data.uptime > 0) { // 只要运行时间大于0就显示
+                const hours = data.uptime / 3600;
+                const finalRatePerHour = hours > 0 ? (expGain / hours) : 0;
+                const rateDisplay = Math.floor(finalRatePerHour) + '/时';
+                $('exp-rate').textContent = rateDisplay;
+
+                // 预计升级
+                if (data.expProgress && data.expProgress.needed > 0 && finalRatePerHour > 0) {
+                    // 计算还需要多少经验
+                    const expNeeded = data.expProgress.needed - data.expProgress.current;
+                    if (expNeeded > 0) {
+                        const minsToLevel = expNeeded / (finalRatePerHour / 60);
+                        if (minsToLevel < 60) {
+                            $('time-to-level').textContent = `约 ${Math.ceil(minsToLevel)} 分钟升级`;
+                        } else {
+                            $('time-to-level').textContent = `约 ${(minsToLevel / 60).toFixed(1)} 小时升级`;
+                        }
+                    } else {
+                        $('time-to-level').textContent = '即将升级';
+                    }
+                } else if (finalRatePerHour <= 0) {
+                    $('time-to-level').textContent = '等待收益...';
+                }
+            } else {
+                $('exp-rate').textContent = '等待数据...';
+                $('time-to-level').textContent = '';
+            }
+        }
+
+        // Automation Switches
+        const auto = data.automation || {};
+        if (!pendingAutomationKeys.has('farm')) $('auto-farm').checked = !!auto.farm;
+        if (!pendingAutomationKeys.has('farm_push')) $('auto-farm-push').checked = !!auto.farm_push;
+        if (!pendingAutomationKeys.has('land_upgrade')) $('auto-land-upgrade').checked = !!auto.land_upgrade;
+        if (!pendingAutomationKeys.has('friend_help_exp_limit')) $('auto-friend').checked = !!auto.friend_help_exp_limit;
+        if (!pendingAutomationKeys.has('task')) $('auto-task').checked = !!auto.task;
+        if (!pendingAutomationKeys.has('sell')) $('auto-sell').checked = !!auto.sell;
+
+        // 只有当用户没有正在操作时才更新下拉框，避免打断用户
+        if (!pendingAutomationKeys.has('fertilizer') && document.activeElement !== $('fertilizer-select') && auto.fertilizer) {
+            $('fertilizer-select').value = auto.fertilizer;
+        }
+
+        // 好友细分开关
+        if (!pendingAutomationKeys.has('friend_steal')) $('auto-friend-steal').checked = !!auto.friend_steal;
+        if (!pendingAutomationKeys.has('friend_help')) $('auto-friend-help').checked = !!auto.friend_help;
+        if (!pendingAutomationKeys.has('friend_bad')) $('auto-friend-bad').checked = !!auto.friend_bad;
+        updateFriendSubControlsState();
+
+        // Operations Stats
+        const opsPayload = (data.operations && typeof data.operations === 'object')
+            ? data.operations
+            : lastOperationsData;
+        renderOpsList(opsPayload || {});
+
+        // Seed Pref
         if (document.activeElement !== $('seed-select') && data.preferredSeed !== undefined) {
             const sel = $('seed-select');
             const strategySel = $('strategy-select');

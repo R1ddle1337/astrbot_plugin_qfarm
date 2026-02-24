@@ -8,18 +8,39 @@ const { getDataFile, ensureDataDir } = require('./runtime-paths');
 const STORE_FILE = getDataFile('store.json');
 const ACCOUNTS_FILE = getDataFile('accounts.json');
 const ALLOWED_PLANTING_STRATEGIES = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit'];
-
+const PUSHOO_CHANNELS = new Set([
+    'webhook', 'qmsg', 'serverchan', 'pushplus', 'pushplushxtrip',
+    'dingtalk', 'wecom', 'bark', 'gocqhttp', 'onebot', 'atri',
+    'pushdeer', 'igot', 'telegram', 'feishu', 'ifttt', 'wecombot',
+    'discord', 'wxpusher',
+]);
+const DEFAULT_OFFLINE_REMINDER = {
+    channel: 'webhook',
+    reloginUrlMode: 'none',
+    endpoint: '',
+    token: '',
+    title: '账号下线提醒',
+    msg: '账号下线',
+    offlineDeleteSec: 120,
+};
 // ============ 全局配置 ============
 const DEFAULT_ACCOUNT_CONFIG = {
     automation: {
         farm: true,
         farm_push: true,   // 收到 LandsNotify 推送时是否立即触发巡田
         land_upgrade: true, // 是否自动升级土地
-        friend: true,
+        friend_help_exp_limit: true, // 帮忙经验达上限后自动停止帮忙
         friend_steal: true, // 偷菜
         friend_help: true,  // 帮忙
         friend_bad: false,  // 捣乱(放虫草)
         task: true,
+        email: true,
+        fertilizer_gift: false,
+        fertilizer_buy: false,
+        free_gifts: true,
+        share_reward: true,
+        vip_gift: true,
+        month_card: true,
         sell: true,
         fertilizer: 'both',
     },
@@ -39,6 +60,7 @@ const DEFAULT_ACCOUNT_CONFIG = {
         end: '07:00',
     },
 };
+const ALLOWED_AUTOMATION_KEYS = new Set(Object.keys(DEFAULT_ACCOUNT_CONFIG.automation));
 
 let accountFallbackConfig = {
     ...DEFAULT_ACCOUNT_CONFIG,
@@ -51,14 +73,69 @@ let globalConfig = {
     accountConfigs: {},
     defaultAccountConfig: cloneAccountConfig(DEFAULT_ACCOUNT_CONFIG),
     ui: {
-        theme: 'dark', // dark | light
+        theme: 'dark',
     },
+    offlineReminder: { ...DEFAULT_OFFLINE_REMINDER },
+    adminPasswordHash: '',
 };
 
+function normalizeOfflineReminder(input) {
+    const src = (input && typeof input === 'object') ? input : {};
+    let offlineDeleteSec = parseInt(src.offlineDeleteSec, 10);
+    if (!Number.isFinite(offlineDeleteSec) || offlineDeleteSec < 1) {
+        offlineDeleteSec = DEFAULT_OFFLINE_REMINDER.offlineDeleteSec;
+    }
+    const rawChannel = (src.channel !== undefined && src.channel !== null)
+        ? String(src.channel).trim().toLowerCase()
+        : '';
+    const endpoint = (src.endpoint !== undefined && src.endpoint !== null)
+        ? String(src.endpoint).trim()
+        : DEFAULT_OFFLINE_REMINDER.endpoint;
+    const migratedChannel = rawChannel
+        || (PUSHOO_CHANNELS.has(String(endpoint || '').trim().toLowerCase())
+            ? String(endpoint || '').trim().toLowerCase()
+            : DEFAULT_OFFLINE_REMINDER.channel);
+    const channel = PUSHOO_CHANNELS.has(migratedChannel)
+        ? migratedChannel
+        : DEFAULT_OFFLINE_REMINDER.channel;
+    const rawReloginUrlMode = (src.reloginUrlMode !== undefined && src.reloginUrlMode !== null)
+        ? String(src.reloginUrlMode).trim().toLowerCase()
+        : DEFAULT_OFFLINE_REMINDER.reloginUrlMode;
+    const reloginUrlMode = new Set(['none', 'qq_link', 'qr_link']).has(rawReloginUrlMode)
+        ? rawReloginUrlMode
+        : DEFAULT_OFFLINE_REMINDER.reloginUrlMode;
+    const token = (src.token !== undefined && src.token !== null)
+        ? String(src.token).trim()
+        : DEFAULT_OFFLINE_REMINDER.token;
+    const title = (src.title !== undefined && src.title !== null)
+        ? String(src.title).trim()
+        : DEFAULT_OFFLINE_REMINDER.title;
+    const msg = (src.msg !== undefined && src.msg !== null)
+        ? String(src.msg).trim()
+        : DEFAULT_OFFLINE_REMINDER.msg;
+    return {
+        channel,
+        reloginUrlMode,
+        endpoint,
+        token,
+        title,
+        msg,
+        offlineDeleteSec,
+    };
+}
+
 function cloneAccountConfig(base = DEFAULT_ACCOUNT_CONFIG) {
+    const srcAutomation = (base && base.automation && typeof base.automation === 'object')
+        ? base.automation
+        : {};
+    const automation = { ...DEFAULT_ACCOUNT_CONFIG.automation };
+    for (const key of Object.keys(automation)) {
+        if (srcAutomation[key] !== undefined) automation[key] = srcAutomation[key];
+    }
+
     return {
         ...base,
-        automation: { ...(base.automation || DEFAULT_ACCOUNT_CONFIG.automation) },
+        automation,
         intervals: { ...(base.intervals || DEFAULT_ACCOUNT_CONFIG.intervals) },
         friendQuietHours: { ...(base.friendQuietHours || DEFAULT_ACCOUNT_CONFIG.friendQuietHours) },
         plantingStrategy: ALLOWED_PLANTING_STRATEGIES.includes(String(base.plantingStrategy || ''))
@@ -81,7 +158,7 @@ function normalizeAccountConfig(input, fallback = accountFallbackConfig) {
 
     if (src.automation && typeof src.automation === 'object') {
         for (const [k, v] of Object.entries(src.automation)) {
-            if (cfg.automation[k] === undefined) continue;
+            if (!ALLOWED_AUTOMATION_KEYS.has(k)) continue;
             if (k === 'fertilizer') {
                 const allowed = ['both', 'normal', 'organic', 'none'];
                 cfg.automation[k] = allowed.includes(v) ? v : cfg.automation[k];
@@ -172,25 +249,63 @@ function loadGlobalConfig() {
                     if (!sid) continue;
                     globalConfig.accountConfigs[sid] = normalizeAccountConfig(cfg, accountFallbackConfig);
                 }
+                // 统一规范化，确保内存中不残留旧字段（如 automation.friend）
+                globalConfig.defaultAccountConfig = cloneAccountConfig(accountFallbackConfig);
+                for (const [id, cfg] of Object.entries(globalConfig.accountConfigs)) {
+                    globalConfig.accountConfigs[id] = normalizeAccountConfig(cfg, accountFallbackConfig);
+                }
             }
             globalConfig.ui = { ...globalConfig.ui, ...(data.ui || {}) };
             const theme = String(globalConfig.ui.theme || '').toLowerCase();
             globalConfig.ui.theme = theme === 'light' ? 'light' : 'dark';
+            globalConfig.offlineReminder = normalizeOfflineReminder(data.offlineReminder);
+            if (typeof data.adminPasswordHash === 'string') {
+                globalConfig.adminPasswordHash = data.adminPasswordHash;
+            }
         }
     } catch (e) {
         console.error('加载配置失败:', e.message);
     }
 }
 
+function sanitizeGlobalConfigBeforeSave() {
+    // default 配置统一白名单净化
+    accountFallbackConfig = normalizeAccountConfig(globalConfig.defaultAccountConfig, DEFAULT_ACCOUNT_CONFIG);
+    globalConfig.defaultAccountConfig = cloneAccountConfig(accountFallbackConfig);
+
+    // 每个账号配置也统一净化
+    const map = (globalConfig.accountConfigs && typeof globalConfig.accountConfigs === 'object')
+        ? globalConfig.accountConfigs
+        : {};
+    const nextMap = {};
+    for (const [id, cfg] of Object.entries(map)) {
+        const sid = String(id || '').trim();
+        if (!sid) continue;
+        nextMap[sid] = normalizeAccountConfig(cfg, accountFallbackConfig);
+    }
+    globalConfig.accountConfigs = nextMap;
+}
+
 // 保存全局配置
 function saveGlobalConfig() {
     ensureDataDir();
     try {
+        sanitizeGlobalConfigBeforeSave();
         console.log('[系统] 正在保存配置到:', STORE_FILE);
         fs.writeFileSync(STORE_FILE, JSON.stringify(globalConfig, null, 2), 'utf8');
     } catch (e) {
         console.error('保存配置失败:', e.message);
     }
+}
+
+function getAdminPasswordHash() {
+    return String(globalConfig.adminPasswordHash || '');
+}
+
+function setAdminPasswordHash(hash) {
+    globalConfig.adminPasswordHash = String(hash || '');
+    saveGlobalConfig();
+    return globalConfig.adminPasswordHash;
 }
 
 // 初始化加载
@@ -349,6 +464,17 @@ function setUITheme(theme) {
     return applyConfigSnapshot({ ui: { theme: next } });
 }
 
+function getOfflineReminder() {
+    return normalizeOfflineReminder(globalConfig.offlineReminder);
+}
+
+function setOfflineReminder(cfg) {
+    const current = normalizeOfflineReminder(globalConfig.offlineReminder);
+    globalConfig.offlineReminder = normalizeOfflineReminder({ ...current, ...(cfg || {}) });
+    saveGlobalConfig();
+    return getOfflineReminder();
+}
+
 // ============ 账号管理 ============
 function loadAccounts() {
     ensureDataDir();
@@ -431,7 +557,11 @@ module.exports = {
     setFriendQuietHours,
     getUI,
     setUITheme,
+    getOfflineReminder,
+    setOfflineReminder,
     getAccounts,
     addOrUpdateAccount,
     deleteAccount,
+    getAdminPasswordHash,
+    setAdminPasswordHash,
 };

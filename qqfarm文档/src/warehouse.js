@@ -9,8 +9,36 @@ const { toLong, toNum, log, logWarn, sleep } = require('./utils');
 const { updateStatusGold } = require('./status');
 const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById, getItemImageById } = require('./gameConfig');
 const { isAutomationOn } = require('./store');
+const protobuf = require('protobufjs');
 
 const SELL_BATCH_SIZE = 15;
+const FERTILIZER_GIFT_PACK_ID = 100003;
+const FERTILIZER_RELATED_IDS = new Set([
+    100003, // 化肥礼包
+    100004, // 有机化肥礼包
+    80001, 80002, 80003, 80004, // 普通化肥道具
+    80011, 80012, 80013, 80014, // 有机化肥道具
+]);
+const FERTILIZER_CONTAINER_LIMIT_HOURS = 990;
+const NORMAL_CONTAINER_ID = 1011;
+const ORGANIC_CONTAINER_ID = 1012;
+const NORMAL_FERTILIZER_ITEM_HOURS = new Map([
+    [80001, 1], [80002, 4], [80003, 8], [80004, 12],
+]);
+const ORGANIC_FERTILIZER_ITEM_HOURS = new Map([
+    [80011, 1], [80012, 4], [80013, 8], [80014, 12],
+]);
+let fertilizerGiftDoneDateKey = '';
+let fertilizerGiftLastOpenAt = 0;
+let fertilizerGiftNoopLogAt = 0;
+
+function getDateKey() {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+}
 
 // ============ API ============
 
@@ -34,6 +62,44 @@ async function sellItems(items) {
     return types.SellReply.decode(replyBody);
 }
 
+async function useItem(itemId, count = 1, landIds = []) {
+    const body = types.UseRequest.encode(types.UseRequest.create({
+        item_id: toLong(itemId),
+        count: toLong(count),
+        land_ids: (landIds || []).map((id) => toLong(id)),
+    })).finish();
+    try {
+        const { body: replyBody } = await sendMsgAsync('gamepb.itempb.ItemService', 'Use', body);
+        return types.UseReply.decode(replyBody);
+    } catch (e) {
+        const msg = String((e && e.message) || '');
+        const isParamError = msg.includes('code=1000020') || msg.includes('请求参数错误');
+        if (!isParamError) throw e;
+
+        // 兼容另一种 UseRequest 编码: { item: { id, count } }
+        const writer = protobuf.Writer.create();
+        const itemWriter = writer.uint32(10).fork(); // field 1: item
+        itemWriter.uint32(8).int64(toLong(itemId));  // item.id
+        itemWriter.uint32(16).int64(toLong(count));  // item.count
+        itemWriter.ldelim();
+        const fallbackBody = writer.finish();
+
+        const { body: fallbackReplyBody } = await sendMsgAsync('gamepb.itempb.ItemService', 'Use', fallbackBody);
+        return types.UseReply.decode(fallbackReplyBody);
+    }
+}
+
+async function batchUseItems(items) {
+    const payload = (items || []).map((it) => ({
+        id: toLong(it.itemId),
+        count: toLong(it.count || 1),
+        uid: toLong(it.uid || 0),
+    }));
+    const body = types.BatchUseRequest.encode(types.BatchUseRequest.create({ items: payload })).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.itempb.ItemService', 'BatchUse', body);
+    return types.BatchUseReply.decode(replyBody);
+}
+
 function isFruitItemId(id) {
     return !!getPlantByFruitId(Number(id));
 }
@@ -43,6 +109,150 @@ function getBagItems(bagReply) {
         return bagReply.item_bag.items;
     }
     return bagReply && bagReply.items ? bagReply.items : [];
+}
+
+function isFertilizerRelatedItemId(itemId) {
+    const id = Number(itemId) || 0;
+    if (id <= 0) return false;
+    // 禁止对容器道具执行使用，避免触发 1011/1012 补充逻辑
+    if (id === 1011 || id === 1012) return false;
+    if (FERTILIZER_RELATED_IDS.has(id)) return true;
+    const info = getItemById(id);
+    if (!info || typeof info !== 'object') return false;
+    const interactionType = String(info.interaction_type || '').toLowerCase();
+    return interactionType === 'fertilizer' || interactionType === 'fertilizerpro';
+}
+
+function collectFertilizerUsePayload(items) {
+    const merged = new Map();
+    for (const it of (items || [])) {
+        const id = toNum(it && it.id);
+        const count = Math.max(0, toNum(it && it.count));
+        if (id <= 0 || count <= 0) continue;
+        if (!isFertilizerRelatedItemId(id)) continue;
+        merged.set(id, (merged.get(id) || 0) + count);
+    }
+    return Array.from(merged.entries()).map(([id, count]) => ({ id, count }));
+}
+
+function getContainerHoursFromBagItems(items) {
+    let normalSec = 0;
+    let organicSec = 0;
+    for (const it of (items || [])) {
+        const id = toNum(it && it.id);
+        const count = Math.max(0, toNum(it && it.count));
+        if (id === NORMAL_CONTAINER_ID) normalSec = count;
+        if (id === ORGANIC_CONTAINER_ID) organicSec = count;
+    }
+    return {
+        normal: normalSec / 3600,
+        organic: organicSec / 3600,
+    };
+}
+
+function getFertilizerItemTypeAndHours(itemId) {
+    const id = Number(itemId) || 0;
+    if (NORMAL_FERTILIZER_ITEM_HOURS.has(id)) {
+        return { type: 'normal', perItemHours: NORMAL_FERTILIZER_ITEM_HOURS.get(id) };
+    }
+    if (ORGANIC_FERTILIZER_ITEM_HOURS.has(id)) {
+        return { type: 'organic', perItemHours: ORGANIC_FERTILIZER_ITEM_HOURS.get(id) };
+    }
+    const info = getItemById(id) || {};
+    const interactionType = String(info.interaction_type || '').toLowerCase();
+    if (interactionType === 'fertilizer') return { type: 'normal', perItemHours: 1 };
+    if (interactionType === 'fertilizerpro') return { type: 'organic', perItemHours: 1 };
+    return { type: 'other', perItemHours: 0 };
+}
+
+function isFertilizerContainerFullError(err) {
+    const msg = String((err && err.message) || '');
+    return msg.includes('code=1003002')
+        || msg.includes('普通化肥容器已达到上限')
+        || msg.includes('普通化肥容器已满')
+        || msg.includes('有机化肥容器已达到上限')
+        || msg.includes('有机化肥容器已满');
+}
+
+async function autoOpenFertilizerGiftPacks() {
+    try {
+        const bagReply = await getBag();
+        const bagItems = getBagItems(bagReply);
+        const payloads = collectFertilizerUsePayload(bagItems);
+        if (payloads.length <= 0) {
+            return 0;
+        }
+        const containerHours = getContainerHoursFromBagItems(bagItems);
+
+        let opened = 0;
+        const details = [];
+        // 按条目 BatchUse，避免数量大时逐个 Use 造成请求风暴
+        for (const row of payloads) {
+            const itemId = Number(row.id) || 0;
+            const rawCount = Math.max(1, Number(row.count) || 0);
+            const { type, perItemHours } = getFertilizerItemTypeAndHours(itemId);
+            let useCount = rawCount;
+
+            // 容器达到 990h 后不再使用对应化肥道具；未达到时也按剩余可用小时裁剪数量
+            if (type === 'normal' || type === 'organic') {
+                const currentHours = type === 'normal' ? containerHours.normal : containerHours.organic;
+                if (currentHours >= FERTILIZER_CONTAINER_LIMIT_HOURS) {
+                    continue;
+                }
+                if (perItemHours > 0) {
+                    const remainHours = Math.max(0, FERTILIZER_CONTAINER_LIMIT_HOURS - currentHours);
+                    const maxCountByHours = Math.floor(remainHours / perItemHours);
+                    useCount = Math.max(0, Math.min(rawCount, maxCountByHours));
+                    if (useCount <= 0) continue;
+                }
+            }
+            const itemInfo = getItemById(itemId);
+            const itemName = itemInfo && itemInfo.name ? String(itemInfo.name) : `物品#${itemId}`;
+            let used = 0;
+            try {
+                await batchUseItems([{ itemId, count: useCount, uid: 0 }]);
+                used = useCount;
+            } catch (e) {
+                // 临时关闭回退 Use：BatchUse 失败时直接跳过该条目
+                // await useItem(itemId, 999, []);
+                // used = useCount;
+                used = 0;
+            }
+            if (used > 0) {
+                opened += used;
+                details.push(`${itemName}x${used}`);
+                if (type === 'normal' && perItemHours > 0) containerHours.normal += used * perItemHours;
+                if (type === 'organic' && perItemHours > 0) containerHours.organic += used * perItemHours;
+            }
+            await sleep(100);
+        }
+
+        if (opened > 0) {
+            fertilizerGiftDoneDateKey = getDateKey();
+            fertilizerGiftLastOpenAt = Date.now();
+            log('仓库', `自动使用化肥类道具 x${opened}${details.length ? ` (${details.join('，')})` : ''}`, {
+                module: 'warehouse',
+                event: 'fertilizer_gift_open',
+                result: 'ok',
+                count: opened,
+            });
+        }
+        return opened;
+    } catch (e) {
+        if (isFertilizerContainerFullError(e)) {
+            return 0;
+        }
+        logWarn('仓库', `开启化肥礼包失败: ${e.message}`, {
+            module: 'warehouse',
+            event: 'fertilizer_gift_open',
+            result: 'error',
+        });
+        return 0;
+    }
+}
+
+async function openFertilizerGiftPacksSilently() {
+    return autoOpenFertilizerGiftPacks();
 }
 
 function getGoldFromItems(items) {
@@ -290,76 +500,19 @@ async function sellAllFruits() {
     }
 }
 
-// 手动触发一次出售（用于调试）
-async function debugSellFruits() {
-    try {
-        log('仓库', '正在检查背包...');
-        const bagReply = await getBag();
-        const items = getBagItems(bagReply);
-        log('仓库', `背包共 ${items.length} 种物品`);
-
-        // 显示所有物品（包含 uid）
-        for (const item of items) {
-            const id = toNum(item.id);
-            const count = toNum(item.count);
-            const uid = item.uid ? toNum(item.uid) : 0;
-            const isFruit = isFruitItemId(id);
-            const name = isFruit ? getFruitName(id) : '非果实';
-            log('仓库', `  [${isFruit ? '果实' : '物品'}] ${name}(${id}) x${count} uid=${uid}`);
-        }
-
-        const toSell = [];
-        const names = [];
-        for (const item of items) {
-            const id = toNum(item.id);
-            const count = toNum(item.count);
-            const uid = item.uid ? toNum(item.uid) : 0;
-            if (isFruitItemId(id) && count > 0) {
-                if (uid === 0) {
-                    logWarn('仓库', `跳过无效物品: ID=${id} Count=${count} (UID丢失)`);
-                    continue;
-                }
-                toSell.push(item);
-                names.push(`${getFruitName(id)}x${count}`);
-            }
-        }
-
-        if (toSell.length === 0) {
-            log('仓库', '没有果实可出售');
-            return;
-        }
-
-        log('仓库', `准备出售 ${toSell.length} 种果实，每批 ${SELL_BATCH_SIZE} 条...`);
-        let totalGold = 0;
-        let knownGold = Number((getUserState() && getUserState().gold) || 0);
-        for (let i = 0; i < toSell.length; i += SELL_BATCH_SIZE) {
-            const batch = toSell.slice(i, i + SELL_BATCH_SIZE);
-            const reply = await sellItems(batch);
-            const inferred = deriveGoldGainFromSellReply(reply, knownGold);
-            const g = Math.max(0, toNum(inferred.gain));
-            knownGold = inferred.nextKnownGold;
-            totalGold += g;
-            log('仓库', `  第 ${Math.floor(i / SELL_BATCH_SIZE) + 1} 批: 获得 ${g} 金币`);
-            if (i + SELL_BATCH_SIZE < toSell.length) await sleep(300);
-        }
-        log('仓库', `出售 ${names.join(', ')}，获得 ${totalGold} 金币`);
-        
-        // 发送出售事件，用于统计金币收益
-        if (totalGold > 0) {
-            networkEvents.emit('sell', totalGold);
-        }
-    } catch (e) {
-        logWarn('仓库', `调试出售失败: ${e.message}`);
-        console.error(e);
-    }
-}
-
 module.exports = {
     getBag,
     getBagDetail,
     sellItems,
+    useItem,
+    batchUseItems,
+    openFertilizerGiftPacksSilently,
+    getFertilizerGiftDailyState: () => ({
+        key: 'fertilizer_gift_open',
+        doneToday: fertilizerGiftDoneDateKey === getDateKey(),
+        lastOpenAt: fertilizerGiftLastOpenAt,
+    }),
     sellAllFruits,
-    debugSellFruits,
     getBagItems,
     getCurrentTotalsFromBag,
 };

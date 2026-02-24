@@ -38,15 +38,11 @@ message UseReply {
 
 // ============ 批量使用物品 ============
 
-message UseItem {
-    int64 item_id = 1;
-    int64 count = 2;
-}
-
 message BatchUseRequest {
-    repeated UseItem items = 1;
+    repeated corepb.Item items = 1;
 }
 
 message BatchUseReply {
-    repeated corepb.Item items = 1;
+    repeated corepb.Item used_items = 1;
+    repeated corepb.Item items = 2;
 }

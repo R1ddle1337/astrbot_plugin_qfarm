@@ -123,6 +123,14 @@ body.light-theme .account-option:hover { background: rgba(0,0,0,0.05); }
 .page-wrap { overflow: auto; padding: 14px; max-width: 100%; overflow-x: hidden; }
 .page { display: none; }
 .page.active { display: block; }
+.personal-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.personal-split > .card {
+  margin-bottom: 0;
+}
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px; margin-bottom: 14px; }
 .card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 8px; }
 .card-head h3 {
@@ -238,6 +246,24 @@ body.light-theme .account-option:hover { background: rgba(0,0,0,0.05); }
 }
 
 @media (min-width: 981px) {
+  #page-accounts .accounts-grid {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  #page-accounts .acc-item {
+    width: fit-content;
+    max-width: 100%;
+  }
+  #page-accounts .acc-actions {
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: clamp(5px, 0.7vh, 10px);
+    width: max-content;
+  }
+  #page-accounts .acc-btn {
+    white-space: nowrap;
+  }
   .app-main {
     height: 100dvh;
     grid-template-rows: var(--topbar-height) minmax(0, 1fr);
@@ -565,9 +591,85 @@ body.light-theme .progress { background: rgba(0,0,0,0.08); }
 
 .form-control { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); padding: 7px 9px; font-size: calc(14px * var(--font-scale)); }
 .form-control:focus { outline: none; border-color: var(--primary); }
+.form-control:disabled {
+  background: color-mix(in srgb, var(--panel-2) 70%, #7f8c97 30%);
+  color: var(--sub);
+  border-color: color-mix(in srgb, var(--line) 70%, #7f8c97 30%);
+  cursor: not-allowed;
+  opacity: 0.85;
+}
+.form-control:disabled::placeholder {
+  color: var(--sub);
+  opacity: 0.9;
+}
 
 .ops-list { display: grid; gap: 8px; }
 .ops-list { min-height: 220px; align-content: start; }
+.task-status-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.personal-split #daily-gifts-list,
+#daily-gifts-list,
+#growth-task-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  min-height: 0;
+}
+#daily-gifts-list .op-stat {
+  min-height: clamp(44px, 4.8vh, 64px);
+}
+#daily-gifts-list .op-stat .label {
+  font-size: calc(18px * var(--font-scale));
+  gap: 0.55em;
+}
+#daily-gifts-list .op-stat .label i {
+  font-size: 1.15em;
+  width: 1.25em;
+}
+#daily-gifts-list .op-stat .count {
+  font-size: calc(18px * var(--font-scale));
+}
+.growth-task-card {
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+.growth-task-progress-wrap {
+  margin-top: 4px;
+  margin-bottom: 2px;
+}
+.growth-task-content {
+  display: block;
+}
+#growth-task-list {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 3px;
+}
+#growth-task-list .growth-task-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: clamp(26px, 2.8vh, 38px);
+  padding: 0;
+}
+#growth-task-list .growth-task-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55em;
+  font-size: calc(20px * var(--font-scale));
+}
+#growth-task-list .growth-task-name i {
+  width: 1.15em;
+  text-align: center;
+  color: var(--sub);
+}
+#growth-task-list .growth-task-status {
+  font-size: calc(20px * var(--font-scale));
+  font-weight: 700;
+  color: var(--accent);
+}
 .op-stat { display: flex; justify-content: space-between; padding: 9px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
 .op-stat .count { color: var(--accent); font-weight: 700; }
 .op-stat .label {
@@ -667,10 +769,10 @@ body.light-theme .progress { background: rgba(0,0,0,0.08); }
 .friend-sub-controls {
   margin: 0;
   width: 100%;
-  padding: clamp(6px, 0.8vh, 10px) 0;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--panel-2);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: clamp(calc(6px * var(--font-scale)), 0.9vh, calc(12px * var(--font-scale)));
@@ -701,34 +803,34 @@ body.light-theme .progress { background: rgba(0,0,0,0.08); }
 .summary { margin-bottom: 6px; text-align: right; color: var(--sub); font-size: calc(13px * var(--font-scale)); }
 .farm-grid { display: grid; grid-template-columns: repeat(auto-fill,minmax(104px,1fr)); gap: 8px; }
 .farm-grid {
-  grid-template-columns: repeat(auto-fill, minmax(clamp(96px, calc(112px * var(--font-scale)), 180px), 1fr));
-  gap: clamp(6px, 0.8vh, 12px);
+  grid-template-columns: repeat(auto-fill, minmax(clamp(112px, calc(132px * var(--font-scale)), 220px), 1fr));
+  gap: clamp(7px, 0.9vh, 14px);
 }
 .land-cell {
   position: relative;
   border-radius: 10px;
   border: 2px solid transparent;
   background: var(--panel-2);
-  min-height: clamp(82px, calc(92px * var(--font-scale)), 150px);
-  padding: clamp(5px, 0.6vh, 10px);
+  min-height: clamp(98px, calc(112px * var(--font-scale)), 178px);
+  padding: clamp(6px, 0.7vh, 12px);
   text-align: center;
   display: flex;
   flex-direction: column;
   justify-content: center;
 }
-.land-cell .id { position: absolute; left: 5px; top: 5px; font-size: calc(10px * var(--font-scale)); }
-.land-cell .needs { position: absolute; right: 5px; bottom: 5px; font-size: calc(10px * var(--font-scale)); background: var(--danger); color: #fff; padding: 1px 4px; border-radius: 6px; }
+.land-cell .id { position: absolute; left: 6px; top: 6px; font-size: calc(11px * var(--font-scale)); }
+.land-cell .needs { position: absolute; right: 6px; bottom: 6px; font-size: calc(11px * var(--font-scale)); background: var(--danger); color: #fff; padding: 1px 5px; border-radius: 6px; }
 .land-crop-image {
-  width: clamp(24px, calc(30px * var(--font-scale)), 50px);
-  height: clamp(24px, calc(30px * var(--font-scale)), 50px);
+  width: clamp(42px, calc(54px * var(--font-scale)), 90px);
+  height: clamp(42px, calc(54px * var(--font-scale)), 90px);
   object-fit: contain;
-  margin: 4px auto 2px;
+  margin: 5px auto 3px;
   display: block;
   pointer-events: none;
   user-select: none;
 }
-.plant-name { font-size: calc(14px * var(--font-scale)); font-weight: 700; }
-.phase-name, .land-meta { font-size: calc(12px * var(--font-scale)); opacity: .9; }
+.plant-name { font-size: calc(16px * var(--font-scale)); font-weight: 700; }
+.phase-name, .land-meta { font-size: calc(13px * var(--font-scale)); opacity: .9; }
 .land-cell.harvestable { border-color: #f3be4f; }
 .land-cell.dead { opacity: .66; }
 .land-cell.land-level-0 { background: #2b2f33; border-color: #454f58; color: #d5dde4; }
@@ -767,24 +869,24 @@ body.light-theme .land-cell.land-level-4 { background: #d4af37; border-color: #b
   padding-bottom: clamp(8px, calc(10px * var(--font-scale)), 16px);
 }
 .farm-grid.mini {
-  grid-template-columns: repeat(auto-fill, minmax(clamp(84px, calc(96px * var(--font-scale)), 150px), 1fr));
-  gap: clamp(5px, 0.7vh, 10px);
+  grid-template-columns: repeat(auto-fill, minmax(clamp(94px, calc(108px * var(--font-scale)), 170px), 1fr));
+  gap: clamp(6px, 0.8vh, 11px);
 }
 .farm-grid.mini .land-cell {
-  min-height: clamp(72px, calc(82px * var(--font-scale)), 128px);
-  padding: clamp(4px, 0.5vh, 8px);
+  min-height: clamp(84px, calc(96px * var(--font-scale)), 142px);
+  padding: clamp(5px, 0.6vh, 9px);
 }
 .farm-grid.mini .plant-name {
-  font-size: calc(13px * var(--font-scale));
+  font-size: calc(14px * var(--font-scale));
 }
 .farm-grid.mini .land-crop-image {
-  width: clamp(20px, calc(24px * var(--font-scale)), 42px);
-  height: clamp(20px, calc(24px * var(--font-scale)), 42px);
-  margin: 2px auto 1px;
+  width: clamp(32px, calc(42px * var(--font-scale)), 66px);
+  height: clamp(32px, calc(42px * var(--font-scale)), 66px);
+  margin: 3px auto 2px;
 }
 .farm-grid.mini .phase-name,
 .farm-grid.mini .land-meta {
-  font-size: calc(11px * var(--font-scale));
+  font-size: calc(12px * var(--font-scale));
 }
 
 .bag-list {
@@ -799,10 +901,19 @@ body.light-theme .land-cell.land-level-4 { background: #d4af37; border-color: #b
   padding: 8px;
   display: grid;
   gap: 3px;
+  justify-items: center;
+  text-align: center;
+}
+.bag-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
 }
 .thumb-wrap {
-  width: clamp(40px, calc(48px * var(--font-scale)), 72px);
-  height: clamp(40px, calc(48px * var(--font-scale)), 72px);
+  width: clamp(50px, calc(58px * var(--font-scale)), 88px);
+  height: clamp(50px, calc(58px * var(--font-scale)), 88px);
   border: 1px solid var(--line);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.04);
@@ -835,15 +946,24 @@ body.light-theme .thumb-wrap {
 .bag-item .name {
   font-weight: 700;
   font-size: calc(15px * var(--font-scale));
+  width: 100%;
 }
 .bag-item .meta {
   font-size: calc(12px * var(--font-scale));
   color: var(--sub);
+  width: 100%;
 }
 .bag-item .count {
   font-size: calc(18px * var(--font-scale));
   font-weight: 700;
   color: var(--accent);
+  width: 100%;
+}
+.bag-item .bag-count-right {
+  width: auto;
+  min-width: 0;
+  text-align: left;
+  white-space: nowrap;
 }
 
 .accounts-grid {
@@ -928,6 +1048,9 @@ body.light-theme #btn-qr-open-url {
 .settings-layout > .card {
   margin-bottom: 0;
 }
+#page-settings .settings-layout > .card:last-child {
+  align-self: start;
+}
 .settings-actions {
   margin-top: clamp(10px, 1.2vh, 18px);
 }
@@ -997,6 +1120,20 @@ body.light-theme #btn-qr-open-url {
   margin-top: clamp(10px, 1vh, 16px);
   font-size: clamp(calc(15px * var(--font-scale)), calc(17px * var(--font-scale)), calc(20px * var(--font-scale)));
   padding: clamp(10px, 1vh, 13px) clamp(12px, 1vw, 16px);
+}
+#page-settings #btn-change-admin-password {
+  margin-top: 0 !important;
+  height: clamp(38px, 4.2vh, 46px);
+  min-height: clamp(38px, 4.2vh, 46px);
+  padding: 0 clamp(12px, 1vw, 16px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+#page-settings .form-group.password-action {
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
 }
 #page-settings #card-efficiency {
   display: flex;
@@ -1143,6 +1280,56 @@ body.light-theme #btn-qr-open-url {
 .login-sub { font-size: calc(13px * var(--font-scale)); color: var(--sub); margin: 3px 0 8px; }
 .login-input { width: 100%; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); color: var(--text); padding: 8px 10px; }
 .login-input:focus { outline: none; border-color: var(--primary); }
+.password-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+.password-wrap .form-control,
+.password-wrap .login-input {
+  width: 100%;
+  padding-right: 42px;
+}
+.password-toggle {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--sub);
+  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  padding: 0;
+  cursor: pointer;
+  font-size: calc(13px * var(--font-scale));
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.password-toggle:hover {
+  color: var(--text);
+  border-color: var(--primary);
+}
+.password-toggle[aria-pressed="true"] {
+  color: var(--primary);
+  border-color: var(--primary);
+}
+/* 隐藏浏览器原生密码可见按钮，避免和自定义按钮并存 */
+input[type="password"]::-ms-reveal,
+input[type="password"]::-ms-clear {
+  display: none;
+}
+input[type="password"]::-webkit-credentials-auto-fill-button,
+input[type="password"]::-webkit-password-reveal-button {
+  display: none !important;
+  visibility: hidden;
+  pointer-events: none;
+}
 .login-error { min-height: 20px; color: var(--danger); font-size: calc(13px * var(--font-scale)); margin-top: 6px; }
 .login-btn { width: 100%; }
 
@@ -1162,6 +1349,20 @@ body.light-theme #btn-qr-open-url {
   .settings-layout { grid-template-columns: 1fr; }
 }
 @media (max-width: 980px) {
+  .task-status-split {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  #daily-gifts-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .personal-split {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .personal-split > .card {
+    margin-bottom: 0;
+  }
   html, body { height: auto; min-height: 100%; }
   body { overflow: auto; overflow-x: hidden; padding-left: 10px; padding-right: 10px; }
   .app-shell,
@@ -1210,7 +1411,7 @@ body.light-theme #btn-qr-open-url {
   .account-dropdown { max-height: 180px; }
   .nav-list {
     display: grid;
-    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
     overflow-x: hidden;
     gap: 4px;
   }
@@ -1227,7 +1428,14 @@ body.light-theme #btn-qr-open-url {
 
   .app-main { grid-template-rows: 54px auto; min-height: 0; }
   .topbar { padding: 0 10px; }
-  .topbar h1 { font-size: calc(18px * var(--font-scale)); }
+  .topbar h1 {
+    font-size: calc(18px * var(--font-scale));
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .topbar-actions { flex-shrink: 0; }
   .page-wrap { padding: 10px; overflow: visible; }
   .card { padding: 10px; margin-bottom: 10px; }
 
@@ -1312,10 +1520,10 @@ body.light-theme #btn-qr-open-url {
   .btn { font-size: calc(14px * var(--font-scale)); }
   .btn-sm { font-size: calc(13px * var(--font-scale)); }
 
-  .farm-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
-  .land-cell { min-height: 82px; }
-  .plant-name { font-size: calc(13px * var(--font-scale)); }
-  .phase-name, .land-meta { font-size: calc(11px * var(--font-scale)); }
+  .farm-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; }
+  .land-cell { min-height: 96px; }
+  .plant-name { font-size: calc(14px * var(--font-scale)); }
+  .phase-name, .land-meta { font-size: calc(12px * var(--font-scale)); }
   .bag-list { grid-template-columns: 1fr; }
 
   .accounts-grid { grid-template-columns: 1fr; }
@@ -1340,12 +1548,18 @@ body.light-theme #btn-qr-open-url {
   }
   #page-settings .checkbox-inline { font-size: calc(16px * var(--font-scale)); }
   #page-settings .save-btn { font-size: calc(16px * var(--font-scale)); padding: 11px 12px; }
+  #page-settings #btn-change-admin-password {
+    margin-top: 0 !important;
+    height: 42px;
+    min-height: 42px;
+    padding: 0 12px;
+  }
 }
 
 @media (max-width: 640px) {
   .switch-inline-row { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   body { padding-left: 8px; padding-right: 8px; }
-  .nav-list { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+  .nav-list { grid-template-columns: repeat(auto-fit, minmax(0, 1fr)); }
   .nav-item { padding: 6px 4px; }
   .topbar h1 { font-size: calc(17px * var(--font-scale)); }
   .status-account img,

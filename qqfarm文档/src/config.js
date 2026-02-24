@@ -4,7 +4,7 @@
 
 const CONFIG = {
     serverUrl: 'wss://gate-obt.nqf.qq.com/prod/ws',
-    clientVersion: '1.6.0.5_20251224',
+    clientVersion: '1.6.0.14_20251224',
     platform: 'qq',              // 平台: qq 或 wx (可通过 --wx 切换为微信)
     os: 'iOS',
     heartbeatInterval: 25000,    // 心跳间隔 25秒
@@ -14,10 +14,8 @@ const CONFIG = {
     farmCheckIntervalMax: 2000,   // 新逻辑：农场巡查间隔最大值(ms)
     friendCheckIntervalMin: 10000,// 新逻辑：好友巡查间隔最小值(ms)
     friendCheckIntervalMax: 10000,// 新逻辑：好友巡查间隔最大值(ms)
-    adminPort: parseInt(process.env.QFARM_ADMIN_PORT || process.env.PORT || '3000', 10), // 管理面板 HTTP 端口
-    adminHost: process.env.QFARM_ADMIN_HOST || '127.0.0.1',
+    adminPort: 3000,             // 管理面板 HTTP 端口
     adminPassword: process.env.ADMIN_PASSWORD || 'admin',
-    disableWebUI: process.env.QFARM_DISABLE_WEBUI === '1',
 };
 
 // 生长阶段枚举
