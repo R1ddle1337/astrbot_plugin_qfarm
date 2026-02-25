@@ -30,3 +30,5 @@ async def test_request_timeout_sec_is_enforced(tmp_path: Path):
         await client.get_accounts()
 
     assert "请求超时" in str(exc.value)
+    assert exc.value.code == "timeout"
+    assert exc.value.source == "TimeoutError"

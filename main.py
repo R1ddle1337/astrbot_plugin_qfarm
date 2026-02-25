@@ -22,7 +22,7 @@ from .services.state_store import QFarmStateStore
     "astrbot_plugin_qfarm",
     "riddle",
     "AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 实现）",
-    "2.4.3",
+    "2.4.4",
     "https://github.com/R1ddle1337/astrbot_plugin_qfarm",
 )
 class QFarmPlugin(Star):
@@ -56,6 +56,12 @@ class QFarmPlugin(Star):
         start_retry_max_attempts = self._cfg_int("start_retry_max_attempts", 3)
         start_retry_base_delay_sec = self._cfg_float("start_retry_base_delay_sec", 1.0)
         start_retry_max_delay_sec = self._cfg_float("start_retry_max_delay_sec", 8.0)
+        qr_login_mode = self._cfg_str("qr_login.mode", "auto")
+        qr_login_poll_timeout_sec = self._cfg_int("qr_login.poll_timeout_sec", 120)
+        qr_login_auto_retry_times = self._cfg_int("qr_login.auto_retry_times", 1)
+        qr_login_retry_backoff_sec = self._cfg_float("qr_login.retry_backoff_sec", 2.0)
+        runtime_heartbeat_fail_limit = self._cfg_int("runtime.heartbeat_fail_limit", 2)
+        friend_error_backoff_sec = self._cfg_float("automation.friend_error_backoff_sec", 5.0)
         auto_start_concurrency = self._cfg_int("auto_start_concurrency", 5)
         persist_runtime_logs = self._cfg_bool("persist_runtime_logs", True)
         runtime_log_max_entries = self._cfg_int("runtime_log_max_entries", 3000)
@@ -68,6 +74,7 @@ class QFarmPlugin(Star):
             "monthcard": self._cfg_bool("automation.monthcard", True),
             "vip": self._cfg_bool("automation.vip", True),
             "share": self._cfg_bool("automation.share", True),
+            "friend_error_backoff_sec": friend_error_backoff_sec,
         }
         default_push = {
             "enabled": self._cfg_bool("push.enabled", False),
@@ -97,6 +104,12 @@ class QFarmPlugin(Star):
             start_retry_max_attempts=start_retry_max_attempts,
             start_retry_base_delay_sec=start_retry_base_delay_sec,
             start_retry_max_delay_sec=start_retry_max_delay_sec,
+            qr_login_mode=qr_login_mode,
+            qr_login_poll_timeout_sec=qr_login_poll_timeout_sec,
+            qr_login_auto_retry_times=qr_login_auto_retry_times,
+            qr_login_retry_backoff_sec=qr_login_retry_backoff_sec,
+            runtime_heartbeat_fail_limit=runtime_heartbeat_fail_limit,
+            automation_friend_error_backoff_sec=friend_error_backoff_sec,
             auto_start_concurrency=auto_start_concurrency,
             persist_runtime_logs=persist_runtime_logs,
             runtime_log_max_entries=runtime_log_max_entries,

@@ -220,7 +220,7 @@ class QFarmCommandRouter:
         except RateLimitError as e:
             return [RouterReply(text=str(e))]
         except QFarmApiError as e:
-            return [RouterReply(text=self._format_failure_message("操作失败", str(e)))]
+            return [RouterReply(text=self._format_api_failure_message("操作失败", e))]
         except Exception as e:
             self._log_warning(f"命令处理异常: {e}")
             return [RouterReply(text=self._format_failure_message("命令执行异常", str(e), internal=True))]
@@ -1326,13 +1326,37 @@ class QFarmCommandRouter:
         code = str(data.get("code") or "")
         qr_url = str(data.get("qrcode") or "")
         login_url = str(data.get("url") or "")
+        mode = str(data.get("mode") or "auto").strip().lower() or "auto"
+        poll_timeout_sec = max(10, self._safe_int(data.get("pollTimeoutSec"), 120))
+        auto_retry_times = max(0, self._safe_int(data.get("autoRetryTimes"), 1))
+        retry_backoff_sec = 2.0
+        try:
+            retry_backoff_sec = max(0.1, float(data.get("retryBackoffSec") or 2.0))
+        except Exception:
+            retry_backoff_sec = 2.0
         if not code:
             raise QFarmApiError("扫码绑定失败：未获取到 code。")
         umo = getattr(event, "unified_msg_origin", None)
-        task = asyncio.create_task(self._poll_qr_login(user_id=user_id, code=code, umo=umo))
+        task = asyncio.create_task(
+            self._poll_qr_login(
+                user_id=user_id,
+                code=code,
+                umo=umo,
+                mode=mode,
+                poll_timeout_sec=poll_timeout_sec,
+                auto_retry_times=auto_retry_times,
+                retry_backoff_sec=retry_backoff_sec,
+            )
+        )
         self._qr_tasks[user_id] = task
         task.add_done_callback(lambda _: self._qr_tasks.pop(user_id, None))
-        lines = ["已创建扫码登录任务，请在 120 秒内完成扫码。", f"轮询code: {code}"]
+        lines = [
+            f"已创建扫码登录任务，请在 {poll_timeout_sec} 秒内完成扫码。",
+            f"扫码模式: {mode}",
+            f"轮询code: {code}",
+        ]
+        if auto_retry_times > 0:
+            lines.append(f"超时后将自动续轮询 {auto_retry_times} 次。")
         if login_url:
             lines.append(f"登录链接: {login_url}")
         replies = [RouterReply(text="\n".join(lines))]
@@ -1340,13 +1364,54 @@ class QFarmCommandRouter:
             replies.append(RouterReply(image_url=qr_url))
         return replies
 
-    async def _poll_qr_login(self, user_id: str, code: str, umo: Any) -> None:
+    async def _poll_qr_login(
+        self,
+        user_id: str,
+        code: str,
+        umo: Any,
+        *,
+        mode: str,
+        poll_timeout_sec: int,
+        auto_retry_times: int,
+        retry_backoff_sec: float,
+    ) -> None:
         try:
-            for _ in range(120):
-                await asyncio.sleep(1)
-                data = await self.api.qr_check(code)
+            current_code = str(code or "").strip()
+            current_mode = str(mode or "auto").strip().lower() or "auto"
+            total_rounds = max(1, int(auto_retry_times) + 1)
+            for round_idx in range(total_rounds):
+                data = await self.api.qr_check(
+                    current_code,
+                    mode=current_mode,
+                    poll_timeout=float(max(10, int(poll_timeout_sec))),
+                    auto_retry=True,
+                    retry_backoff=1.0,
+                )
                 status = str(data.get("status") or "")
+                if status == "Wait" and bool(data.get("timeout")):
+                    if round_idx >= total_rounds - 1:
+                        await self._notify_active(umo, f"扫码登录超时（{poll_timeout_sec}秒）。")
+                        return
+                    await self._notify_active(
+                        umo,
+                        f"扫码登录超时，正在自动重试（{round_idx + 1}/{max(1, total_rounds - 1)}）...",
+                    )
+                    await asyncio.sleep(max(0.1, float(retry_backoff_sec)))
+                    refreshed = await self.api.qr_create(mode=current_mode)
+                    new_code = str(refreshed.get("code") or "").strip()
+                    if not new_code:
+                        await self._notify_active(umo, "自动重试失败：未获取到新的扫码 code，请手动重试。")
+                        return
+                    current_code = new_code
+                    current_mode = str(refreshed.get("mode") or current_mode).strip().lower() or current_mode
+                    refresh_lines = [f"已刷新二维码，请在 {poll_timeout_sec} 秒内完成扫码。", f"轮询code: {current_code}"]
+                    login_url = str(refreshed.get("url") or "").strip()
+                    if login_url:
+                        refresh_lines.append(f"登录链接: {login_url}")
+                    await self._notify_active(umo, "\n".join(refresh_lines))
+                    continue
                 if status == "Wait":
+                    await asyncio.sleep(1)
                     continue
                 if status == "OK":
                     auth_code = str(data.get("code") or "")
@@ -1389,7 +1454,7 @@ class QFarmCommandRouter:
                 if status == "Error":
                     await self._notify_active(umo, f"扫码登录失败: {data.get('error') or '未知错误'}")
                     return
-            await self._notify_active(umo, "扫码登录超时（120秒）。")
+            await self._notify_active(umo, f"扫码登录超时（{poll_timeout_sec}秒）。")
         except asyncio.CancelledError:
             await self._notify_active(umo, "扫码绑定任务已取消。")
         except Exception as e:
@@ -1688,12 +1753,14 @@ class QFarmCommandRouter:
         runtime_state = data.get("runtimeState", "stopped") if isinstance(data, dict) else "stopped"
         retry_count = data.get("startRetryCount", 0) if isinstance(data, dict) else 0
         last_error = str(data.get("lastStartError") or "") if isinstance(data, dict) else ""
+        connected = bool(conn.get("connected")) if isinstance(conn, dict) else False
+        connection_label = self._connection_label(connected=connected, runtime_state=runtime_state)
 
         auto_snapshot = self._format_automation_snapshot(automation if isinstance(automation, dict) else {})
         if not verbose:
             lines = [
                 "【农场状态】",
-                f"连接: {'在线' if conn.get('connected') else '离线'} | 运行态: {runtime_state}",
+                f"连接: {connection_label} | 运行态: {runtime_state}",
                 f"账号: {status.get('name') or '-'} Lv{status.get('level', 0)}",
                 f"资源: 金币{status.get('gold', 0)} 经验{status.get('exp', 0)} 点券{status.get('coupon', 0)}",
             ]
@@ -1708,7 +1775,7 @@ class QFarmCommandRouter:
 
         lines = [
             "【农场状态】",
-            f"连接: {'在线' if conn.get('connected') else '离线'}",
+            f"连接: {connection_label}",
             f"运行态: {runtime_state}",
             f"启动重试次数: {retry_count}",
             f"昵称: {status.get('name') or '-'}",
@@ -1732,6 +1799,8 @@ class QFarmCommandRouter:
         friend_remain = self._safe_int(next_checks.get("friendRemainSec"), -1)
         if runtime_state != "running":
             lines.append("调度说明: 当前账号未运行，自动化不会执行。")
+        elif not connected:
+            lines.append("调度说明: 连接未就绪/自动重连中，恢复连接后会继续自动巡查。")
         elif farm_remain == 0 or friend_remain == 0:
             lines.append("调度说明: 巡查计时已到，下一轮自动化应在 1 秒内触发。")
         else:
@@ -1759,6 +1828,14 @@ class QFarmCommandRouter:
         if op_parts:
             lines.append("操作计数: " + " ".join(op_parts))
         return lines
+
+    @staticmethod
+    def _connection_label(*, connected: bool, runtime_state: str) -> str:
+        if connected:
+            return "在线"
+        if str(runtime_state or "").strip().lower() == "running":
+            return "连接未就绪/自动重连中"
+        return "离线"
 
     def _format_lands(self, data: dict[str, Any]) -> list[str]:
         lands = data.get("lands", []) if isinstance(data, dict) else []
@@ -1949,6 +2026,9 @@ class QFarmCommandRouter:
         if "账号未运行" in text:
             hints.append("建议: qfarm 账号 启动")
             hints.append("建议: qfarm 服务 状态")
+        if "连接未就绪/自动重连中" in text or "session disconnected" in lowered:
+            hints.append("建议: qfarm 状态")
+            hints.append("建议: qfarm 账号 重连")
         if "请求超时" in text or "request timeout" in lowered or "timed out" in lowered:
             hints.append("建议: 稍后重试一次")
             hints.append("建议: qfarm 服务 状态")
@@ -1970,6 +2050,54 @@ class QFarmCommandRouter:
             if hint not in uniq_hints:
                 uniq_hints.append(hint)
         return text + "\n" + "\n".join(uniq_hints)
+
+    def _api_error_hints(self, code: str) -> list[str]:
+        mapping = {
+            "runtime_not_ready": [
+                "建议: qfarm 账号 启动",
+                "建议: qfarm 服务 状态",
+            ],
+            "session_disconnected": [
+                "建议: qfarm 状态",
+                "建议: qfarm 账号 重连",
+            ],
+            "qr_timeout": [
+                "建议: qfarm 账号 绑定扫码",
+                "建议: 在超时前完成扫码确认",
+            ],
+            "auth_invalid": [
+                "建议: qfarm 账号 绑定 code <code>",
+                "建议: qfarm 账号 绑定扫码",
+                "建议: qfarm 账号 启动",
+            ],
+            "timeout": [
+                "建议: 稍后重试一次",
+                "建议: qfarm 服务 状态",
+            ],
+            "general": [],
+        }
+        return list(mapping.get(code, []))
+
+    def _merge_guidance(self, message: str, extra_hints: list[str]) -> str:
+        base = self._append_next_step_guidance(message)
+        if not extra_hints:
+            return base
+        lines = [line.strip() for line in str(base).splitlines() if line.strip()]
+        for hint in extra_hints:
+            text = str(hint or "").strip()
+            if text and text not in lines:
+                lines.append(text)
+        return "\n".join(lines)
+
+    def _format_api_failure_message(self, prefix: str, error: QFarmApiError) -> str:
+        message = str(error or "").strip() or "后端调用失败。"
+        raw_code = str(getattr(error, "code", "general") or "general").strip().lower()
+        code = raw_code if raw_code in QFarmApiError.VALID_CODES else "general"
+        guided = self._merge_guidance(message, self._api_error_hints(code))
+        source = str(getattr(error, "source", "") or "").strip()
+        if source and f"source={source}" not in guided:
+            guided = f"{guided}\n来源: {source}"
+        return f"{prefix}: [{code}] {guided}"
 
     def _error_code(self, message: str, *, internal: bool = False) -> str:
         text = str(message or "").strip().lower()

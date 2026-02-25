@@ -29,6 +29,13 @@ def _to_int(value: Any, default: int = 0) -> int:
         return int(default)
 
 
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
+
+
 DEFAULT_AUTOMATION = {
     "farm": True,
     "farm_push": True,
@@ -50,9 +57,11 @@ DEFAULT_AUTOMATION = {
 DAILY_ROUTINE_KEY_EMAIL = "email_rewards"
 DAILY_ROUTINE_KEY_MALL_FREE = "mall_free_gifts"
 DAILY_ROUTINE_KEY_MALL_ORGANIC = "mall_organic_fertilizer"
+DAILY_ROUTINE_KEY_FERTILIZER_GIFT = "fertilizer_gift_use"
 DAILY_ROUTINE_KEY_SHARE = "daily_share"
 DAILY_ROUTINE_KEY_VIP = "vip_daily_gift"
 DAILY_ROUTINE_KEY_MONTHCARD = "month_card_gift"
+DAILY_ROUTINE_ERROR_BACKOFF_SEC = 30
 
 ORGANIC_FERTILIZER_GOODS_ID = 1002
 
@@ -66,6 +75,8 @@ class AccountRuntime:
         session_config: GatewaySessionConfig,
         config_data: GameConfigData,
         heartbeat_interval_sec: int = 25,
+        heartbeat_fail_limit: int | None = None,
+        friend_error_backoff_sec: float | None = None,
         rpc_timeout_sec: int = 10,
         share_file_path: Any | None = None,
         logger: Any | None = None,
@@ -138,6 +149,26 @@ class AccountRuntime:
         self._invite_task: asyncio.Task | None = None
         self._last_plant_skip_reason = ""
         self._daily_routines = self._normalize_daily_routines(self.settings.get("dailyRoutines"))
+        self.heartbeat_fail_limit = max(
+            1,
+            _to_int(
+                heartbeat_fail_limit if heartbeat_fail_limit is not None else self.settings.get("heartbeatFailLimit"),
+                2,
+            ),
+        )
+        self.friend_error_backoff_sec = max(
+            1.0,
+            _to_float(
+                friend_error_backoff_sec
+                if friend_error_backoff_sec is not None
+                else self.settings.get(
+                    "friendErrorBackoffSec",
+                    (self.settings.get("automation") or {}).get("friend_error_backoff_sec", 5.0),
+                ),
+                5.0,
+            ),
+        )
+        self._session_disconnect_bound = False
 
     async def start(self) -> None:
         if self.running:
@@ -182,6 +213,20 @@ class AccountRuntime:
         self.settings = dict(settings)
         self.settings_revision = max(self.settings_revision, _to_int(revision, 0))
         self._daily_routines = self._normalize_daily_routines(self.settings.get("dailyRoutines"))
+        self.heartbeat_fail_limit = max(1, _to_int(self.settings.get("heartbeatFailLimit"), self.heartbeat_fail_limit))
+        self.friend_error_backoff_sec = max(
+            1.0,
+            _to_float(
+                self.settings.get(
+                    "friendErrorBackoffSec",
+                    (self.settings.get("automation") or {}).get(
+                        "friend_error_backoff_sec",
+                        self.friend_error_backoff_sec,
+                    ),
+                ),
+                self.friend_error_backoff_sec,
+            ),
+        )
         self._reset_schedule()
 
     def update_account(self, account: dict[str, Any]) -> None:
@@ -382,12 +427,16 @@ class AccountRuntime:
         if token in {"mall", "shop"}:
             free = self._with_status_code(await self._run_mall_free_gifts_routine(force=bool(force)))
             organic = self._with_status_code(await self._run_mall_organic_routine(force=bool(force)))
+            fertilizer_gift = self._with_status_code(await self._run_fertilizer_gift_routine(force=bool(force)))
             return {
                 "routine": "mall",
-                "statusCode": self._merge_status_codes([free.get("statusCode"), organic.get("statusCode")]),
+                "statusCode": self._merge_status_codes([free.get("statusCode"), organic.get("statusCode"), fertilizer_gift.get("statusCode")]),
                 "freeGifts": free,
                 "organicFertilizer": organic,
+                "fertilizerGift": fertilizer_gift,
             }
+        if token in {"fertilizer", "fertilizer_gift"}:
+            return self._with_status_code(await self._run_fertilizer_gift_routine(force=bool(force)))
         if token in {"monthcard", "month_card"}:
             return self._with_status_code(await self._run_monthcard_routine(force=bool(force)))
         if token in {"vip", "qqvip"}:
@@ -406,6 +455,7 @@ class AccountRuntime:
         if auto.get("mall", True):
             result["mallFreeGifts"] = self._with_status_code(await self._run_mall_free_gifts_routine(force=bool(force)))
             result["mallOrganicFertilizer"] = self._with_status_code(await self._run_mall_organic_routine(force=bool(force)))
+            result["fertilizerGift"] = self._with_status_code(await self._run_fertilizer_gift_routine(force=bool(force)))
         if auto.get("share", True):
             result["share"] = self._with_status_code(await self._run_share_routine(force=bool(force)))
         if auto.get("monthcard", True):
@@ -655,6 +705,48 @@ class AccountRuntime:
             self._debug_log("daily", f"mall organic routine failed: {e}", module="task", event=routine_key, result="error")
             return {"routine": routine_key, "bought": 0, "error": str(e), "state": self._routine_state(routine_key)}
 
+    async def _run_fertilizer_gift_routine(self, *, force: bool = False) -> dict[str, Any]:
+        routine_key = DAILY_ROUTINE_KEY_FERTILIZER_GIFT
+        if not await self._routine_can_run(routine_key, cooldown_sec=600, force=force):
+            return {"routine": routine_key, "skipped": True, "state": self._routine_state(routine_key)}
+        try:
+            result = await self.warehouse.use_fertilizer_gifts()
+            used_count = max(0, _to_int(result.get("usedCount"), 0))
+            used_kinds = max(0, _to_int(result.get("usedKinds"), 0))
+            failed_kinds = max(0, _to_int(result.get("failedKinds"), 0))
+            mode = str(result.get("mode") or "")
+            error = str(result.get("error") or "")
+            if used_count > 0:
+                await self._mark_routine_done(routine_key, result="ok", claimed=True, error="")
+            elif failed_kinds > 0 and error:
+                await self._mark_routine_error(routine_key, error)
+            else:
+                await self._mark_routine_done(routine_key, result="none", error="")
+            self._debug_log(
+                "daily",
+                f"fertilizer gifts used: kinds={used_kinds}, count={used_count}, failed={failed_kinds}, mode={mode}",
+                module="task",
+                event=routine_key,
+                result="ok" if used_count > 0 else ("error" if failed_kinds > 0 and error else "none"),
+                usedKinds=used_kinds,
+                usedCount=used_count,
+                failedKinds=failed_kinds,
+                mode=mode,
+            )
+            return {
+                "routine": routine_key,
+                "usedKinds": used_kinds,
+                "usedCount": used_count,
+                "failedKinds": failed_kinds,
+                "mode": mode,
+                "error": error if failed_kinds > 0 and used_count <= 0 else "",
+                "state": self._routine_state(routine_key),
+            }
+        except Exception as e:
+            await self._mark_routine_error(routine_key, str(e))
+            self._debug_log("daily", f"fertilizer gift routine failed: {e}", module="task", event=routine_key, result="error")
+            return {"routine": routine_key, "usedKinds": 0, "usedCount": 0, "error": str(e), "state": self._routine_state(routine_key)}
+
     async def _run_monthcard_routine(self, *, force: bool = False) -> dict[str, Any]:
         routine_key = DAILY_ROUTINE_KEY_MONTHCARD
         if not await self._routine_can_run(routine_key, cooldown_sec=600, force=force):
@@ -751,6 +843,9 @@ class AccountRuntime:
         code = str(self.account.get("code") or "").strip()
         if not code:
             raise RuntimeError("账号 code 为空")
+        if not self._session_disconnect_bound:
+            await self.session.on_disconnect(self._on_session_disconnect)
+            self._session_disconnect_bound = True
         await self.session.start(code=code)
         await self.session.notify_dispatcher.on("*", self._on_notify)
         reply = await self.user.login(self.session_config.client_version)
@@ -784,29 +879,107 @@ class AccountRuntime:
         self._reset_schedule()
         asyncio.create_task(self.run_daily_routines(force=True))
 
+    async def _on_session_disconnect(self, reason: str) -> None:
+        self.connected = False
+        self.login_ready = False
+        self._debug_log(
+            "session",
+            f"session disconnected: {reason}",
+            module="system",
+            event="session_disconnected",
+            result="error",
+            reason=str(reason or ""),
+        )
+
     async def _heartbeat_loop(self) -> None:
+        fail_streak = 0
         while self.running:
             try:
                 await asyncio.sleep(self.heartbeat_interval_sec)
                 if not self.login_ready:
+                    fail_streak = 0
+                    continue
+                fail_limit = max(1, _to_int(getattr(self, "heartbeat_fail_limit", 3), 3))
+                if not bool(getattr(self.session, "connected", False)):
+                    fail_streak += 1
+                    if fail_streak >= fail_limit:
+                        self.connected = False
+                        self.login_ready = False
+                        self._debug_log(
+                            "heartbeat",
+                            f"heartbeat fail limit reached ({fail_streak}/{fail_limit}), mark offline: session disconnected",
+                            module="system",
+                            event="heartbeat_fail_limit",
+                            result="error",
+                            streak=fail_streak,
+                            limit=fail_limit,
+                        )
+                        try:
+                            await self.session.stop()
+                        except Exception:
+                            pass
+                        fail_streak = 0
                     continue
                 await self.user.heartbeat(_to_int(self.user_state["gid"]), self.session_config.client_version)
+                fail_streak = 0
             except asyncio.CancelledError:
                 return
-            except Exception:
+            except Exception as e:
+                fail_limit = max(1, _to_int(getattr(self, "heartbeat_fail_limit", 3), 3))
+                fail_streak += 1
+                self._debug_log(
+                    "heartbeat",
+                    f"heartbeat failed ({fail_streak}/{fail_limit}): {e}",
+                    module="system",
+                    event="heartbeat_error",
+                    result="error",
+                    streak=fail_streak,
+                    limit=fail_limit,
+                )
+                if fail_streak < fail_limit:
+                    continue
                 self.connected = False
                 self.login_ready = False
+                self._debug_log(
+                    "heartbeat",
+                    f"heartbeat fail limit reached ({fail_streak}/{fail_limit}), mark offline and reconnect",
+                    module="system",
+                    event="heartbeat_fail_limit",
+                    result="error",
+                    streak=fail_streak,
+                    limit=fail_limit,
+                )
+                try:
+                    await self.session.stop()
+                except Exception:
+                    pass
+                fail_streak = 0
 
     async def _scheduler_loop(self) -> None:
-        backoff = 1
+        backoff = 1.0
         farm_error_backoff = 5.0
+        friend_error_backoff_base = max(1.0, _to_float(getattr(self, "friend_error_backoff_sec", 10.0), 10.0))
+        friend_error_backoff = friend_error_backoff_base
         while self.running:
             try:
-                if not self.login_ready or not self.connected:
-                    await asyncio.sleep(backoff)
-                    backoff = min(30, backoff * 2)
-                    await self._connect_and_login()
-                    backoff = 1
+                session_connected = bool(getattr(self.session, "connected", False))
+                if not self.login_ready or not self.connected or not session_connected:
+                    self.connected = False
+                    self.login_ready = False
+                    try:
+                        await self._connect_and_login()
+                        backoff = 1.0
+                    except Exception as e:
+                        self._debug_log(
+                            "scheduler",
+                            f"reconnect failed, backoff={backoff:.1f}s: {e}",
+                            module="system",
+                            event="reconnect_error",
+                            result="error",
+                            backoffSec=backoff,
+                        )
+                        await asyncio.sleep(backoff)
+                        backoff = min(30.0, backoff * 2)
                     continue
                 now = time.time()
                 auto = self._automation()
@@ -817,10 +990,10 @@ class AccountRuntime:
                         if auto.get("task", True):
                             await self.check_and_claim_tasks()
                         await self.run_daily_routines(force=False)
-                        self._next_farm_at = now + self._rand_interval("farm")
+                        self._next_farm_at = time.time() + self._rand_interval("farm")
                         farm_error_backoff = 5.0
                     except Exception as e:
-                        self._next_farm_at = now + farm_error_backoff
+                        self._next_farm_at = time.time() + farm_error_backoff
                         self._debug_log(
                             "scheduler",
                             f"farm cycle failed, backoff={farm_error_backoff:.1f}s: {e}",
@@ -831,9 +1004,22 @@ class AccountRuntime:
                         )
                         farm_error_backoff = min(300.0, farm_error_backoff * 2)
                 if now >= self._next_friend_at:
-                    if auto.get("friend", True) and not self._in_friend_quiet_hours():
-                        await self._auto_friend_cycle()
-                    self._next_friend_at = now + self._rand_interval("friend")
+                    try:
+                        if auto.get("friend", True) and not self._in_friend_quiet_hours():
+                            await self._auto_friend_cycle()
+                        self._next_friend_at = time.time() + self._rand_interval("friend")
+                        friend_error_backoff = friend_error_backoff_base
+                    except Exception as e:
+                        self._next_friend_at = time.time() + friend_error_backoff
+                        self._debug_log(
+                            "scheduler",
+                            f"friend cycle failed, backoff={friend_error_backoff:.1f}s: {e}",
+                            module="system",
+                            event="friend_cycle_error",
+                            result="error",
+                            backoffSec=friend_error_backoff,
+                        )
+                        friend_error_backoff = min(300.0, friend_error_backoff * 2)
                 await asyncio.sleep(1.0)
             except asyncio.CancelledError:
                 return
@@ -1356,13 +1542,12 @@ class AccountRuntime:
         if not force and state.get("doneDateKey") == self._today_key():
             return False
         last_check_at = max(0, _to_int(state.get("lastCheckAt"), 0))
+        if not force and str(state.get("lastResult") or "") == "error":
+            if now_ms - last_check_at < DAILY_ROUTINE_ERROR_BACKOFF_SEC * 1000:
+                return False
+            return True
         if not force and now_ms - last_check_at < max(1, int(cooldown_sec)) * 1000:
             return False
-        self._daily_routines[routine_key] = {
-            **state,
-            "lastCheckAt": now_ms,
-        }
-        await self._persist_daily_routines()
         return True
 
     async def _mark_routine_done(self, key: str, *, result: str, claimed: bool = False, error: str = "") -> None:
@@ -1374,6 +1559,7 @@ class AccountRuntime:
         self._daily_routines[routine_key] = {
             **state,
             "doneDateKey": self._today_key(),
+            "lastCheckAt": now_ms,
             "lastResult": str(result or ""),
             "lastError": str(error or ""),
             "lastClaimAt": now_ms if claimed else max(0, _to_int(state.get("lastClaimAt"), 0)),
@@ -1384,9 +1570,11 @@ class AccountRuntime:
         routine_key = str(key or "").strip()
         if not routine_key:
             return
+        now_ms = int(time.time() * 1000)
         state = self._routine_state(routine_key)
         self._daily_routines[routine_key] = {
             **state,
+            "lastCheckAt": now_ms,
             "lastResult": "error",
             "lastError": str(error or ""),
         }

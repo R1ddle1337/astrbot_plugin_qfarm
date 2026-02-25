@@ -44,6 +44,31 @@
     "type": "float",
     "default": 8.0
   },
+  "qr_login.mode": {
+    "description": "扫码登录模式（auto/miniapp/pc）",
+    "type": "string",
+    "default": "auto"
+  },
+  "qr_login.poll_timeout_sec": {
+    "description": "扫码登录轮询超时（秒）",
+    "type": "int",
+    "default": 120
+  },
+  "qr_login.auto_retry_times": {
+    "description": "扫码登录自动重试次数",
+    "type": "int",
+    "default": 1
+  },
+  "qr_login.retry_backoff_sec": {
+    "description": "扫码登录重试退避秒数",
+    "type": "float",
+    "default": 2.0
+  },
+  "runtime.heartbeat_fail_limit": {
+    "description": "运行时心跳连续失败阈值",
+    "type": "int",
+    "default": 2
+  },
   "auto_start_concurrency": {
     "description": "插件启动时账号自动拉起并发数",
     "type": "int",
@@ -138,6 +163,11 @@
     "description": "默认是否开启分享礼包领取",
     "type": "bool",
     "default": true
+  },
+  "automation.friend_error_backoff_sec": {
+    "description": "好友巡查异常后的退避秒数",
+    "type": "float",
+    "default": 5.0
   },
   "push.enabled": {
     "description": "默认是否开启自动推送（按核心告警集触发）",

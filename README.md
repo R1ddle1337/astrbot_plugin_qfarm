@@ -330,7 +330,14 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.4.3
+- Current release: v2.4.4
+- 2026-02-25 v2.4.4
+- Reason: resolve the v2.4.3 regression cluster reported by users (`扫码超时/登录后掉线/查询失效/自动化异常`) by completing the qr/runtime config path and tightening reconnect behavior.
+- Change: runtime manager now supports `qr_login` + `runtime` config passthrough and forwards mode/timeout/retry parameters to QR create/check (with legacy compatibility); QR bind flow now uses configurable timeout + auto re-poll rounds and refreshes QR on timeout; account runtime now handles session-disconnect callbacks and configurable friend-cycle error backoff; fixed `GatewaySession.stop()` deadlock when canceling recv loop; synced defaults for `qr_login.mode=auto`, `qr_login.auto_retry_times=1`, `runtime.heartbeat_fail_limit=2`, `automation.friend_error_backoff_sec=5.0`.
+- Impact: login and reconnect behavior are more stable under transient network failures, query failure messages are more diagnosable, and automation avoids error-loop storms after friend-cycle exceptions.
+- Risk: environments relying on old QR defaults (`local` mode + 2 retries + long friend backoff) will observe new default behavior after upgrade; if needed, override through config.
+- Verification: `PYTHONPATH=d:\\botproject python -m pytest tests -q` passed (`145 passed`).
+- Verification: `python scripts/check_release_ready.py` passed.
 - 2026-02-24 v2.4.3
 - Reason: close high-risk security gaps found in qfarm audit, especially account log access control and push delivery boundary hardening.
 - Change: make `账号日志` super-admin only; harden push endpoint checks (`https` only and private host deny-by-default); default to header-only token with optional body fallback switch; add push concurrency/rate gates; add protobuf payload size guard; add runtime status write lock, scheduler backoff, and state store atomic write.

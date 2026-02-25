@@ -1,13 +1,29 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Awaitable
 
 from .runtime.runtime_manager import QFarmRuntimeManager
 
 
 class QFarmApiError(RuntimeError):
     """qfarm 本地后端调用失败。"""
+
+    VALID_CODES = {
+        "runtime_not_ready",
+        "session_disconnected",
+        "qr_timeout",
+        "auth_invalid",
+        "timeout",
+        "general",
+    }
+
+    def __init__(self, message: str, *, code: str = "general", source: str = "unknown") -> None:
+        text = str(message or "").strip() or "后端调用失败。"
+        super().__init__(text)
+        normalized_code = str(code or "general").strip().lower()
+        self.code = normalized_code if normalized_code in self.VALID_CODES else "general"
+        self.source = str(source or "unknown").strip() or "unknown"
 
 
 class QFarmApiClient:
@@ -155,28 +171,139 @@ class QFarmApiClient:
     async def debug_sell(self, account_id: str | int) -> None:
         await self._wrap(self.backend.debug_sell(account_id))
 
-    async def qr_create(self) -> dict[str, Any]:
-        return await self._wrap(self.backend.qr_create())
+    async def qr_create(self, mode: str | None = None) -> dict[str, Any]:
+        return await self._wrap(self.backend.qr_create(mode=mode))
 
-    async def qr_check(self, code: str) -> dict[str, Any]:
-        return await self._wrap(self.backend.qr_check(code))
+    async def qr_check(
+        self,
+        code: str,
+        *,
+        mode: str | None = None,
+        poll_timeout: float | None = None,
+        auto_retry: bool | None = None,
+        retry_backoff: float | None = None,
+    ) -> dict[str, Any]:
+        return await self._wrap(
+            self.backend.qr_check(
+                code,
+                mode=mode,
+                poll_timeout=poll_timeout,
+                auto_retry=auto_retry,
+                retry_backoff=retry_backoff,
+            )
+        )
 
-    async def _wrap(self, awaitable):
+    async def _wrap(self, awaitable: Awaitable[Any]) -> Any:
         timeout = max(1, int(self.request_timeout_sec))
         try:
             return await asyncio.wait_for(awaitable, timeout=timeout)
         except asyncio.TimeoutError as e:
-            raise QFarmApiError(f"请求超时({timeout}s)，请稍后重试。") from e
-        except QFarmApiError:
-            raise
+            raise QFarmApiError(
+                f"请求超时({timeout}s)，请稍后重试。",
+                code="timeout",
+                source=type(e).__name__,
+            ) from e
+        except QFarmApiError as e:
+            if e.code in QFarmApiError.VALID_CODES and e.source:
+                raise
+            raise QFarmApiError(
+                str(e),
+                code=getattr(e, "code", "general"),
+                source=getattr(e, "source", type(e).__name__),
+            ) from e
         except Exception as e:
-            raise QFarmApiError(self._normalize_error_message(e)) from e
+            source = type(e).__name__
+            raise QFarmApiError(
+                self._normalize_error_message(e, source=source),
+                code=self._classify_error(e),
+                source=source,
+            ) from e
 
     @staticmethod
-    def _normalize_error_message(error: Exception) -> str:
+    def _normalize_error_message(error: Exception, *, source: str = "") -> str:
+        source_name = str(source or type(error).__name__).strip() or "unknown"
         text = str(error or "").strip()
         if not text:
-            return f"后端调用失败(source={type(error).__name__})"
+            return f"后端调用失败(source={source_name})"
         if len(text) > 360:
             text = text[:360] + "..."
-        return f"{text} (source={type(error).__name__})"
+        if "source=" in text:
+            return text
+        return f"{text} (source={source_name})"
+
+    @classmethod
+    def _classify_error(cls, error: Exception) -> str:
+        text = str(error or "").strip().lower()
+        if cls._contains_any(
+            text,
+            (
+                "runtime not ready",
+                "service not ready",
+                "backend not ready",
+                "account not running",
+                "not started",
+                "未运行",
+                "未启动",
+                "未就绪",
+            ),
+        ):
+            return "runtime_not_ready"
+        if cls._contains_any(
+            text,
+            (
+                "session disconnected",
+                "session closed",
+                "connection closed",
+                "connection lost",
+                "websocket closed",
+                "websocket disconnected",
+                "broken pipe",
+                "会话断开",
+                "连接断开",
+                "连接已关闭",
+                "自动重连中",
+            ),
+        ):
+            return "session_disconnected"
+        if cls._contains_any(
+            text,
+            (
+                "qr timeout",
+                "qrcode timeout",
+                "qr login timeout",
+                "扫码超时",
+                "扫码登录超时",
+                "二维码超时",
+                "二维码已过期",
+            ),
+        ):
+            return "qr_timeout"
+        if cls._contains_any(
+            text,
+            (
+                "auth invalid",
+                "authentication failed",
+                "authorization failed",
+                "unauthorized",
+                "forbidden",
+                "invalid credential",
+                "invalid token",
+                "token expired",
+                "token invalid",
+                "网关鉴权失败",
+                "鉴权失败",
+                "认证失败",
+                "凭据失效",
+                "凭据无效",
+                "http 401",
+                "http 403",
+            ),
+        ):
+            return "auth_invalid"
+        if isinstance(error, TimeoutError) or cls._contains_any(text, ("timeout", "timed out", "超时")):
+            return "timeout"
+        return "general"
+
+    @staticmethod
+    def _contains_any(text: str, keywords: tuple[str, ...]) -> bool:
+        return any(keyword in text for keyword in keywords)

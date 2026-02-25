@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from typing import Any
 
@@ -27,32 +28,62 @@ class NodeProcessManager:
         runtime_log_max_entries: int = 3000,
         runtime_log_flush_interval_sec: float = 2.0,
         runtime_log_flush_batch: int = 80,
+        qr_login_mode: str = "auto",
+        qr_login_poll_timeout_sec: int = 120,
+        qr_login_auto_retry_times: int = 1,
+        qr_login_retry_backoff_sec: float = 2.0,
+        runtime_heartbeat_fail_limit: int = 2,
+        automation_friend_error_backoff_sec: float = 5.0,
         default_automation: dict[str, Any] | None = None,
         default_push: dict[str, Any] | None = None,
         managed_mode: bool = True,
         logger: Any | None = None,
     ) -> None:
         self.managed_mode = bool(managed_mode)
-        self.backend = QFarmRuntimeManager(
-            plugin_root=Path(plugin_root),
-            data_dir=Path(data_dir),
-            gateway_ws_url=gateway_ws_url,
-            client_version=client_version,
-            platform=platform,
-            heartbeat_interval_sec=heartbeat_interval_sec,
-            rpc_timeout_sec=rpc_timeout_sec,
-            start_retry_max_attempts=start_retry_max_attempts,
-            start_retry_base_delay_sec=start_retry_base_delay_sec,
-            start_retry_max_delay_sec=start_retry_max_delay_sec,
-            auto_start_concurrency=auto_start_concurrency,
-            persist_runtime_logs=persist_runtime_logs,
-            runtime_log_max_entries=runtime_log_max_entries,
-            runtime_log_flush_interval_sec=runtime_log_flush_interval_sec,
-            runtime_log_flush_batch=runtime_log_flush_batch,
-            default_automation=default_automation,
-            default_push=default_push,
-            logger=logger,
-        )
+        automation_payload = dict(default_automation or {})
+        automation_payload.setdefault("friend_error_backoff_sec", float(automation_friend_error_backoff_sec))
+        qr_login_payload = {
+            "mode": str(qr_login_mode or "auto"),
+            "poll_timeout_sec": max(10, int(qr_login_poll_timeout_sec)),
+            "auto_retry_times": max(0, int(qr_login_auto_retry_times)),
+            "retry_backoff_sec": max(0.1, float(qr_login_retry_backoff_sec)),
+        }
+        runtime_payload = {
+            "heartbeat_fail_limit": max(1, int(runtime_heartbeat_fail_limit)),
+        }
+
+        runtime_kwargs = {
+            "plugin_root": Path(plugin_root),
+            "data_dir": Path(data_dir),
+            "gateway_ws_url": gateway_ws_url,
+            "client_version": client_version,
+            "platform": platform,
+            "heartbeat_interval_sec": heartbeat_interval_sec,
+            "rpc_timeout_sec": rpc_timeout_sec,
+            "start_retry_max_attempts": start_retry_max_attempts,
+            "start_retry_base_delay_sec": start_retry_base_delay_sec,
+            "start_retry_max_delay_sec": start_retry_max_delay_sec,
+            "auto_start_concurrency": auto_start_concurrency,
+            "persist_runtime_logs": persist_runtime_logs,
+            "runtime_log_max_entries": runtime_log_max_entries,
+            "runtime_log_flush_interval_sec": runtime_log_flush_interval_sec,
+            "runtime_log_flush_batch": runtime_log_flush_batch,
+            "default_automation": automation_payload,
+            "default_push": default_push,
+            "qr_login": qr_login_payload,
+            "qr_login_mode": qr_login_payload["mode"],
+            "qr_login_poll_timeout_sec": qr_login_payload["poll_timeout_sec"],
+            "qr_login_auto_retry_times": qr_login_payload["auto_retry_times"],
+            "qr_login_retry_backoff_sec": qr_login_payload["retry_backoff_sec"],
+            "runtime": runtime_payload,
+            "runtime_heartbeat_fail_limit": runtime_payload["heartbeat_fail_limit"],
+            "automation_friend_error_backoff_sec": automation_payload["friend_error_backoff_sec"],
+            "logger": logger,
+        }
+        accepted = set(inspect.signature(QFarmRuntimeManager.__init__).parameters)
+        accepted.discard("self")
+        passthrough_kwargs = {key: value for key, value in runtime_kwargs.items() if key in accepted}
+        self.backend = QFarmRuntimeManager(**passthrough_kwargs)
 
     def status(self) -> dict[str, Any]:
         data = self.backend.service_status()

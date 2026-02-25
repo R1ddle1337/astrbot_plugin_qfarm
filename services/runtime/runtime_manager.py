@@ -16,7 +16,7 @@ from ..domain.analytics_service import AnalyticsService
 from ..domain.config_data import GameConfigData
 from ..protocol import GatewaySessionConfig
 from ..qr_code_renderer import QRCodeRenderError, cleanup_qr_cache, save_qr_png
-from ..qr_login import QFarmQRLogin
+from ..qr_login import QR_LOGIN_MODE_AUTO, QFarmQRLogin, normalize_login_mode
 from .account_runtime import AccountRuntime
 
 
@@ -25,6 +25,13 @@ def _to_int(value: Any, default: int = 0) -> int:
         return int(value)
     except Exception:
         return int(default)
+
+
+def _to_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return float(default)
 
 
 DEFAULT_ACCOUNT_CONFIG = {
@@ -44,6 +51,7 @@ DEFAULT_ACCOUNT_CONFIG = {
         "share": True,
         "sell": True,
         "fertilizer": "both",
+        "friend_error_backoff_sec": 5.0,
     },
     "strategy": "preferred",
     "preferredSeedId": 0,
@@ -61,6 +69,8 @@ DEFAULT_ACCOUNT_CONFIG = {
         "end": "07:00",
     },
     "dailyRoutines": {},
+    "heartbeatFailLimit": 2,
+    "friendErrorBackoffSec": 5.0,
     "push": {
         "enabled": False,
         "channel": "webhook",
@@ -116,6 +126,14 @@ class QFarmRuntimeManager:
         runtime_log_flush_batch: int = 80,
         default_automation: dict[str, Any] | None = None,
         default_push: dict[str, Any] | None = None,
+        qr_login: dict[str, Any] | None = None,
+        qr_login_mode: str = QR_LOGIN_MODE_AUTO,
+        qr_login_poll_timeout_sec: int = 120,
+        qr_login_auto_retry_times: int = 1,
+        qr_login_retry_backoff_sec: float = 2.0,
+        runtime: dict[str, Any] | None = None,
+        runtime_heartbeat_fail_limit: int = 2,
+        automation_friend_error_backoff_sec: float = 5.0,
         logger: Any | None = None,
     ) -> None:
         self.plugin_root = Path(plugin_root)
@@ -142,9 +160,34 @@ class QFarmRuntimeManager:
         self.runtime_log_flush_interval_sec = max(0.2, float(runtime_log_flush_interval_sec))
         self.runtime_log_flush_batch = max(1, int(runtime_log_flush_batch))
         self._default_account_config = json.loads(json.dumps(DEFAULT_ACCOUNT_CONFIG))
+        self.qr_login_config = self._normalize_qr_login_settings(
+            {
+                "mode": qr_login_mode,
+                "poll_timeout_sec": qr_login_poll_timeout_sec,
+                "auto_retry_times": qr_login_auto_retry_times,
+                "retry_backoff_sec": qr_login_retry_backoff_sec,
+                **(qr_login if isinstance(qr_login, dict) else {}),
+            }
+        )
+        runtime_payload = runtime if isinstance(runtime, dict) else {}
+        runtime_heartbeat_limit = max(
+            1,
+            _to_int(
+                runtime_payload.get(
+                    "heartbeat_fail_limit",
+                    runtime_payload.get("heartbeatFailLimit", runtime_heartbeat_fail_limit),
+                ),
+                2,
+            ),
+        )
+        self.runtime_heartbeat_fail_limit = runtime_heartbeat_limit
+        self.default_friend_error_backoff_sec = max(1.0, _to_float(automation_friend_error_backoff_sec, 5.0))
         incoming_auto = default_automation if isinstance(default_automation, dict) else {}
         base_auto = self._default_account_config.setdefault("automation", {})
         for key, value in incoming_auto.items():
+            if key == "friend_error_backoff_sec":
+                self.default_friend_error_backoff_sec = max(1.0, _to_float(value, self.default_friend_error_backoff_sec))
+                continue
             if key not in base_auto:
                 continue
             if key == "fertilizer":
@@ -152,6 +195,9 @@ class QFarmRuntimeManager:
                 base_auto[key] = mode if mode in {"both", "normal", "organic", "none"} else "both"
                 continue
             base_auto[key] = bool(value)
+        base_auto["friend_error_backoff_sec"] = self.default_friend_error_backoff_sec
+        self._default_account_config["friendErrorBackoffSec"] = self.default_friend_error_backoff_sec
+        self._default_account_config["heartbeatFailLimit"] = runtime_heartbeat_limit
         incoming_push = default_push if isinstance(default_push, dict) else {}
         base_push = self._default_account_config.setdefault("push", {})
         for key, value in incoming_push.items():
@@ -433,12 +479,35 @@ class QFarmRuntimeManager:
                     lastStartError=last_error if attempt > 1 else "",
                 )
 
+                account_settings = self._get_account_settings(account_id_text)
+                heartbeat_fail_limit = max(
+                    1,
+                    _to_int(
+                        account_settings.get("heartbeatFailLimit"),
+                        self.runtime_heartbeat_fail_limit,
+                    ),
+                )
+                friend_error_backoff_sec = max(
+                    1.0,
+                    _to_float(
+                        account_settings.get(
+                            "friendErrorBackoffSec",
+                            (account_settings.get("automation") or {}).get(
+                                "friend_error_backoff_sec",
+                                self.default_friend_error_backoff_sec,
+                            ),
+                        ),
+                        self.default_friend_error_backoff_sec,
+                    ),
+                )
                 runtime = AccountRuntime(
                     account=account,
-                    settings=self._get_account_settings(account_id_text),
+                    settings=account_settings,
                     session_config=self.session_config,
                     config_data=self.config_data,
                     heartbeat_interval_sec=self.heartbeat_interval_sec,
+                    heartbeat_fail_limit=heartbeat_fail_limit,
+                    friend_error_backoff_sec=friend_error_backoff_sec,
                     rpc_timeout_sec=self.rpc_timeout_sec,
                     share_file_path=self.data_dir / "share.txt",
                     logger=self.logger,
@@ -720,6 +789,7 @@ class QFarmRuntimeManager:
             "friendQuietHours": cfg.get("friendQuietHours", {}),
             "automation": cfg.get("automation", {}),
             "dailyRoutines": cfg.get("dailyRoutines", {}),
+            "runtime": {"heartbeatFailLimit": max(1, _to_int(cfg.get("heartbeatFailLimit"), self.runtime_heartbeat_fail_limit))},
             "push": cfg.get("push", {}),
             "ui": self._settings.get("ui", {"theme": "dark"}),
         }
@@ -767,20 +837,83 @@ class QFarmRuntimeManager:
     async def debug_sell(self, account_id: str | int) -> dict[str, Any]:
         return await self._require_runtime(account_id).debug_sell()
 
-    async def qr_create(self) -> dict[str, Any]:
-        payload = await self.qr_login.create()
+    async def qr_create(self, mode: str | None = None) -> dict[str, Any]:
+        selected_mode = normalize_login_mode(mode, default=str(self.qr_login_config.get("mode") or QR_LOGIN_MODE_AUTO))
+        create_fn = getattr(self.qr_login, "create")
+        try:
+            payload = await create_fn(mode=selected_mode)
+        except TypeError:
+            payload = await create_fn()
+
+        payload = dict(payload or {})
+        payload["mode"] = str(payload.get("mode") or selected_mode)
+        payload["pollTimeoutSec"] = max(1.0, _to_float(payload.get("pollTimeoutSec"), _to_float(self.qr_login_config.get("poll_timeout"), 120.0)))
+        payload["autoRetryTimes"] = max(0, _to_int(payload.get("autoRetryTimes"), _to_int(self.qr_login_config.get("auto_retry_times"), 1)))
+        payload["retryBackoffSec"] = max(0.1, _to_float(payload.get("retryBackoffSec"), _to_float(self.qr_login_config.get("retry_backoff"), 2.0)))
+
         login_url = str(payload.get("url") or "").strip()
-        if not login_url:
+        qrcode_png = payload.get("qrcode_png")
+        if not login_url and not isinstance(qrcode_png, (bytes, bytearray)):
             raise RuntimeError("扫码登录链接为空")
         cleanup_qr_cache(self.qr_cache_dir, ttl_sec=self.qr_cache_ttl_sec)
         try:
-            payload["qrcode"] = save_qr_png(login_url, self.qr_cache_dir)
+            if isinstance(qrcode_png, (bytes, bytearray)) and qrcode_png:
+                qr_file = self.qr_cache_dir / f"qrcode_{int(time.time() * 1000)}.png"
+                qr_file.write_bytes(bytes(qrcode_png))
+                payload["qrcode"] = str(qr_file)
+            else:
+                payload["qrcode"] = save_qr_png(login_url, self.qr_cache_dir)
         except QRCodeRenderError as e:
             raise RuntimeError(f"本地二维码生成失败: {e}") from e
+        except Exception as e:
+            raise RuntimeError(f"二维码写入失败: {e}") from e
+        payload.pop("qrcode_png", None)
         return payload
 
-    async def qr_check(self, code: str) -> dict[str, Any]:
-        return await self.qr_login.check(str(code or ""))
+    async def qr_check(
+        self,
+        code: str,
+        *,
+        mode: str | None = None,
+        poll_timeout: float | None = None,
+        auto_retry: bool | None = None,
+        retry_backoff: float | None = None,
+    ) -> dict[str, Any]:
+        code_text = str(code or "").strip()
+        if not code_text:
+            raise RuntimeError("code 不能为空")
+        selected_mode = normalize_login_mode(mode, default=str(self.qr_login_config.get("mode") or QR_LOGIN_MODE_AUTO))
+        poll_timeout_sec = max(
+            1.0,
+            _to_float(
+                poll_timeout,
+                _to_float(self.qr_login_config.get("poll_timeout"), 120.0),
+            ),
+        )
+        auto_retry_enabled = bool(
+            self.qr_login_config.get("auto_retry", False) if auto_retry is None else auto_retry
+        )
+        retry_backoff_sec = max(
+            0.1,
+            _to_float(
+                retry_backoff,
+                _to_float(self.qr_login_config.get("retry_backoff"), 2.0),
+            ),
+        )
+        check_fn = getattr(self.qr_login, "check")
+        try:
+            result = await check_fn(
+                code_text,
+                mode=selected_mode,
+                poll_timeout=poll_timeout_sec,
+                auto_retry=auto_retry_enabled,
+                retry_backoff=retry_backoff_sec,
+            )
+        except TypeError:
+            result = await check_fn(code_text)
+        data = dict(result or {})
+        data.setdefault("mode", selected_mode)
+        return data
 
     def _require_runtime(self, account_id: str | int) -> AccountRuntime:
         account_id_text = str(account_id or "").strip()
@@ -800,7 +933,7 @@ class QFarmRuntimeManager:
         return None
 
     def _get_account_settings(self, account_id: str) -> dict[str, Any]:
-        base = self._merge_settings(dict(DEFAULT_ACCOUNT_CONFIG), self._settings.get("defaultAccountConfig", {}))
+        base = self._merge_settings(dict(self._default_account_config), self._settings.get("defaultAccountConfig", {}))
         account_cfg = (self._settings.get("accountConfigs", {}) or {}).get(str(account_id), {})
         return self._merge_settings(base, account_cfg)
 
@@ -823,6 +956,17 @@ class QFarmRuntimeManager:
                 if key == "fertilizer":
                     mode = str(value or "both").strip().lower()
                     merged_auto[key] = mode if mode in {"both", "normal", "organic", "none"} else "both"
+                    continue
+                if key == "friend_error_backoff_sec":
+                    backoff_sec = max(
+                        1.0,
+                        _to_float(
+                            value,
+                            result.get("friendErrorBackoffSec", self.default_friend_error_backoff_sec),
+                        ),
+                    )
+                    merged_auto[key] = backoff_sec
+                    result["friendErrorBackoffSec"] = backoff_sec
                     continue
                 merged_auto[key] = bool(value)
         if isinstance(src.get("intervals"), dict):
@@ -856,6 +1000,44 @@ class QFarmRuntimeManager:
                 elif key in {"maxPerMinute", "max_per_minute"}:
                     merged_push["maxPerMinute"] = max(1, min(600, _to_int(value, 60)))
             result["push"] = self._normalize_push_settings(merged_push)
+        if isinstance(src.get("runtime"), dict):
+            runtime_src = src.get("runtime", {})
+            if "heartbeatFailLimit" in runtime_src or "heartbeat_fail_limit" in runtime_src:
+                result["heartbeatFailLimit"] = max(
+                    1,
+                    _to_int(
+                        runtime_src.get("heartbeatFailLimit", runtime_src.get("heartbeat_fail_limit")),
+                        result.get("heartbeatFailLimit", self.runtime_heartbeat_fail_limit),
+                    ),
+                )
+        if "heartbeatFailLimit" in src:
+            result["heartbeatFailLimit"] = max(
+                1,
+                _to_int(src.get("heartbeatFailLimit"), result.get("heartbeatFailLimit", self.runtime_heartbeat_fail_limit)),
+            )
+        if "friendErrorBackoffSec" in src:
+            result["friendErrorBackoffSec"] = max(
+                1.0,
+                _to_float(
+                    src.get("friendErrorBackoffSec"),
+                    result.get("friendErrorBackoffSec", self.default_friend_error_backoff_sec),
+                ),
+            )
+        auto_cfg = result.get("automation", {})
+        if isinstance(auto_cfg, dict):
+            if "friend_error_backoff_sec" in auto_cfg:
+                auto_cfg["friend_error_backoff_sec"] = max(
+                    1.0,
+                    _to_float(
+                        auto_cfg.get("friend_error_backoff_sec"),
+                        result.get("friendErrorBackoffSec", self.default_friend_error_backoff_sec),
+                    ),
+                )
+            if "friend_error_backoff_sec" in auto_cfg and "friendErrorBackoffSec" not in src:
+                result["friendErrorBackoffSec"] = max(
+                    1.0,
+                    _to_float(auto_cfg.get("friend_error_backoff_sec"), self.default_friend_error_backoff_sec),
+                )
         return result
 
     @staticmethod
@@ -882,6 +1064,40 @@ class QFarmRuntimeManager:
                 if "lastError" in value:
                     current["lastError"] = str(value.get("lastError") or "")
         return result
+
+    @staticmethod
+    def _normalize_qr_login_settings(raw: Any) -> dict[str, Any]:
+        data = raw if isinstance(raw, dict) else {}
+        mode = normalize_login_mode(data.get("mode"), default=QR_LOGIN_MODE_AUTO)
+        poll_timeout = max(
+            1.0,
+            _to_float(
+                data.get("poll_timeout", data.get("pollTimeoutSec", data.get("poll_timeout_sec", 120))),
+                120.0,
+            ),
+        )
+        auto_retry_times = max(
+            0,
+            _to_int(
+                data.get("auto_retry_times", data.get("autoRetryTimes", 1)),
+                1,
+            ),
+        )
+        auto_retry = bool(data.get("auto_retry", auto_retry_times > 0))
+        retry_backoff = max(
+            0.1,
+            _to_float(
+                data.get("retry_backoff", data.get("retryBackoffSec", data.get("retry_backoff_sec", 2.0))),
+                2.0,
+            ),
+        )
+        return {
+            "mode": mode,
+            "poll_timeout": poll_timeout,
+            "auto_retry": auto_retry,
+            "auto_retry_times": auto_retry_times,
+            "retry_backoff": retry_backoff,
+        }
 
     @staticmethod
     def _normalize_push_settings(raw: Any) -> dict[str, Any]:

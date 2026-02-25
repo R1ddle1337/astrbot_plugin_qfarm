@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
 from urllib.parse import urlencode
@@ -13,6 +14,9 @@ from .notify_dispatcher import NotifyDispatcher
 
 class GatewaySessionError(RuntimeError):
     pass
+
+
+DisconnectHandler = Callable[[str], Awaitable[None] | None]
 
 
 @dataclass(slots=True)
@@ -51,6 +55,8 @@ class GatewaySession:
         self._send_lock = asyncio.Lock()
         self._close_lock = asyncio.Lock()
         self._closed = True
+        self._disconnect_handlers: list[DisconnectHandler] = []
+        self._disconnect_lock = asyncio.Lock()
 
         self.notify_dispatcher = NotifyDispatcher()
 
@@ -97,6 +103,21 @@ class GatewaySession:
         await self.stop()
         await self.start(code=code)
 
+    async def on_disconnect(self, handler: DisconnectHandler) -> None:
+        if not callable(handler):
+            return
+        async with self._disconnect_lock:
+            if all(existing is not handler for existing in self._disconnect_handlers):
+                self._disconnect_handlers.append(handler)
+
+    async def off_disconnect(self, handler: DisconnectHandler) -> None:
+        async with self._disconnect_lock:
+            self._disconnect_handlers = [h for h in self._disconnect_handlers if h is not handler]
+
+    async def set_disconnect_callback(self, handler: DisconnectHandler | None) -> None:
+        async with self._disconnect_lock:
+            self._disconnect_handlers = [handler] if callable(handler) else []
+
     async def call(self, service: str, method: str, body: bytes, timeout_sec: int | None = None) -> bytes:
         if not self.connected:
             raise GatewaySessionError("websocket is not connected")
@@ -128,6 +149,7 @@ class GatewaySession:
         ws = self._ws
         if ws is None:
             return
+        disconnect_reason = "websocket disconnected"
         try:
             async for msg in ws:
                 if msg.type == aiohttp.WSMsgType.BINARY:
@@ -139,12 +161,17 @@ class GatewaySession:
                 elif msg.type in {aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED}:
                     break
                 elif msg.type == aiohttp.WSMsgType.ERROR:
+                    disconnect_reason = "websocket receive error"
                     break
         except Exception as e:
+            disconnect_reason = f"websocket recv loop error: {e}"
             self._log_warning(f"websocket recv loop error: {e}")
         finally:
+            should_notify = not self._closed
             await self._fail_all_pending("websocket disconnected")
-            await self._close_from_recv_loop()
+            if should_notify:
+                await self._emit_disconnect(disconnect_reason)
+                await self._close_from_recv_loop()
 
     async def _handle_binary(self, data: bytes) -> None:
         parsed = decode_gate_message(data)
@@ -198,6 +225,8 @@ class GatewaySession:
             recv_task.cancel()
             try:
                 await recv_task
+            except asyncio.CancelledError:
+                pass
             except Exception:
                 pass
         ws = self._ws
@@ -212,6 +241,17 @@ class GatewaySession:
         if http is not None and not http.closed:
             await http.close()
         await self.notify_dispatcher.clear()
+
+    async def _emit_disconnect(self, reason: str) -> None:
+        async with self._disconnect_lock:
+            handlers = list(self._disconnect_handlers)
+        for handler in handlers:
+            try:
+                ret = handler(reason)
+                if asyncio.iscoroutine(ret):
+                    await ret
+            except Exception as e:
+                self._log_warning(f"disconnect callback failed: {e}")
 
     def _log_warning(self, message: str) -> None:
         if self.logger and hasattr(self.logger, "warning"):

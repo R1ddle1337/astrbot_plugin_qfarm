@@ -1,16 +1,24 @@
 from __future__ import annotations
 
-from pathlib import Path
+import asyncio
 
 import pytest
 
 from astrbot_plugin_qfarm.services.api_client import QFarmApiClient, QFarmApiError
-from astrbot_plugin_qfarm.services.runtime.runtime_manager import QFarmRuntimeManager
 
 
-class _ErrorBackend(QFarmRuntimeManager):
+class _ErrorBackend:
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
     async def get_accounts(self) -> dict[str, object]:
-        raise RuntimeError("后端异常")
+        raise self.error
+
+
+class _SlowBackend:
+    async def get_accounts(self) -> dict[str, object]:
+        await asyncio.sleep(1.2)
+        return {"accounts": []}
 
 
 class _PushBackend:
@@ -31,22 +39,50 @@ class _PushBackend:
 
 
 @pytest.mark.asyncio
-async def test_api_client_error_contains_source_hint(tmp_path: Path):
-    backend = _ErrorBackend(
-        plugin_root=tmp_path,
-        data_dir=tmp_path / "data",
-        gateway_ws_url="wss://example.invalid/ws",
-        client_version="1.0.0",
-        logger=None,
-    )
-    client = QFarmApiClient(backend)
+async def test_api_client_error_contains_source_and_general_code():
+    client = QFarmApiClient(backend=_ErrorBackend(RuntimeError("后端异常")))  # type: ignore[arg-type]
 
     with pytest.raises(QFarmApiError) as exc:
         await client.get_accounts()
 
-    message = str(exc.value)
-    assert "后端异常" in message
-    assert "source=RuntimeError" in message
+    err = exc.value
+    assert err.code == "general"
+    assert err.source == "RuntimeError"
+    assert "后端异常" in str(err)
+    assert "source=RuntimeError" in str(err)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_error", "expected_code"),
+    [
+        (RuntimeError("runtime not ready"), "runtime_not_ready"),
+        (ConnectionError("session disconnected"), "session_disconnected"),
+        (RuntimeError("扫码登录超时"), "qr_timeout"),
+        (RuntimeError("网关鉴权失败(HTTP 400)"), "auth_invalid"),
+        (TimeoutError("timed out"), "timeout"),
+    ],
+)
+async def test_api_client_classifies_error_codes(raw_error: Exception, expected_code: str):
+    client = QFarmApiClient(backend=_ErrorBackend(raw_error))  # type: ignore[arg-type]
+
+    with pytest.raises(QFarmApiError) as exc:
+        await client.get_accounts()
+
+    assert exc.value.code == expected_code
+
+
+@pytest.mark.asyncio
+async def test_api_client_timeout_error_contains_timeout_code_and_source():
+    client = QFarmApiClient(backend=_SlowBackend(), request_timeout_sec=1)  # type: ignore[arg-type]
+
+    with pytest.raises(QFarmApiError) as exc:
+        await client.get_accounts()
+
+    err = exc.value
+    assert err.code == "timeout"
+    assert err.source == "TimeoutError"
+    assert "请求超时" in str(err)
 
 
 @pytest.mark.asyncio
