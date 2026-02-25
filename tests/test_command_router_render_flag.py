@@ -42,7 +42,8 @@ def _build_router(tmp_path: Path, api: _DummyApi) -> QFarmCommandRouter:
 def test_mark_render_candidates_only_for_normal_text(tmp_path: Path):
     router = _build_router(tmp_path, _DummyApi())
     replies = [
-        RouterReply(text="【农场状态】\n金币: 100"),
+        RouterReply(text="【农场状态】\n" + "\n".join([f"- line {i}" for i in range(20)])),
+        RouterReply(text="【种子列表】\n- 20001: 白萝卜 Lv1 价格10"),
         RouterReply(text="用法: qfarm 状态"),
         RouterReply(text="操作失败: 超时"),
         RouterReply(text="权限不足：你不在用户白名单中。"),
@@ -54,6 +55,7 @@ def test_mark_render_candidates_only_for_normal_text(tmp_path: Path):
     assert marked[2].prefer_image is False
     assert marked[3].prefer_image is False
     assert marked[4].prefer_image is False
+    assert marked[5].prefer_image is False
 
 
 @pytest.mark.asyncio

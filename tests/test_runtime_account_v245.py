@@ -42,6 +42,7 @@ async def test_get_status_next_checks_uses_ceil_and_contains_last_farm(monkeypat
     runtime._daily_routines_snapshot = lambda: {"email_rewards": {"done": True}}
     runtime._last_farm_result = {
         "mode": "plant",
+        "plantTargetCount": 5,
         "plantedCount": 2,
         "noActionReason": "",
         "plantSkipReason": "库存不足",
@@ -53,6 +54,7 @@ async def test_get_status_next_checks_uses_ceil_and_contains_last_farm(monkeypat
     assert status["nextChecks"] == {"farmRemainSec": 1, "friendRemainSec": 1}
     assert status["lastFarm"] == {
         "mode": "plant",
+        "plantTargetCount": 5,
         "plantedCount": 2,
         "noActionReason": "",
         "plantSkipReason": "库存不足",

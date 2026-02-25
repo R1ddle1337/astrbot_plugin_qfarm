@@ -74,7 +74,7 @@ def build_qfarm_payload_pages(
                 "icon": icon,
                 "theme": normalized_theme,
                 "summary": summary if index == 1 else "",
-                "stats": stats if index == 1 else stats[:4],
+                "stats": stats if index == 1 else [],
                 "sections": [{"title": "详情", "rows": chunk}] if chunk else [],
                 "page": {"index": index, "total": total_pages},
                 "footer": footer,

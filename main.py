@@ -22,7 +22,7 @@ from .services.state_store import QFarmStateStore
     "astrbot_plugin_qfarm",
     "riddle",
     "AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 实现）",
-    "2.4.5",
+    "2.4.6",
     "https://github.com/R1ddle1337/astrbot_plugin_qfarm",
 )
 class QFarmPlugin(Star):
@@ -194,19 +194,20 @@ class QFarmPlugin(Star):
                 and should_render_qfarm_image(reply.text)
             ):
                 payloads = build_qfarm_payload_pages(reply.text, theme=self.state_store.get_render_theme("light"))
-                images: list[str] = []
-                for payload in payloads:
-                    image_path = await self.image_renderer.render_qfarm(payload)
-                    if not image_path:
-                        images = []
-                        break
-                    images.append(image_path)
-                if images:
-                    rendered = True
-                    for image_path in images:
-                        image = self._build_image_result(current_event, image_path)
-                        if image is not None:
-                            yield image
+                if len(payloads) <= 1:
+                    images: list[str] = []
+                    for payload in payloads:
+                        image_path = await self.image_renderer.render_qfarm(payload)
+                        if not image_path:
+                            images = []
+                            break
+                        images.append(image_path)
+                    if images:
+                        rendered = True
+                        for image_path in images:
+                            image = self._build_image_result(current_event, image_path)
+                            if image is not None:
+                                yield image
             if reply.text and not rendered:
                 plain = self._build_plain_result(current_event, reply.text)
                 if plain is not None:

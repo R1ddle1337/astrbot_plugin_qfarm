@@ -159,3 +159,20 @@ async def test_status_verbose_shows_last_farm_no_action_reason_when_plant_missin
     assert replies
     text = replies[0].text
     assert "最近农田说明: 当前地块状态无需执行本轮操作" in text
+
+
+@pytest.mark.asyncio
+async def test_status_verbose_shows_last_farm_plant_diagnostics(tmp_path: Path):
+    status_payload = _default_status_payload()
+    status_payload["lastFarm"] = {
+        "plantTargetCount": 6,
+        "plantedCount": 4,
+        "plantSkipReason": "部分地块库存不足",
+    }
+    router = _build_router(tmp_path, status_payload=status_payload)
+
+    replies = await router._cmd_status("u1", ["详细"])
+
+    assert replies
+    text = replies[0].text
+    assert "最近种植诊断: target=6 planted=4" in text

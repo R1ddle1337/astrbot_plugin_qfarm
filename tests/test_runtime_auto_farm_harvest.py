@@ -86,6 +86,7 @@ async def test_do_farm_operation_all_triggers_harvest_and_plant_flow():
     assert result["hadWork"] is True
     assert runtime._last_farm_result == {
         "mode": "all",
+        "plantTargetCount": 4,
         "plantedCount": 3,
         "noActionReason": "",
         "plantSkipReason": "",
@@ -249,6 +250,41 @@ async def test_auto_plant_choose_seed_uses_level_floor_one():
         strategy="preferred",
         preferred_seed_id=0,
     )
+
+
+@pytest.mark.asyncio
+async def test_auto_plant_falls_back_to_bag_seed_when_shop_candidates_empty():
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.account = {"id": "acc-1"}
+    runtime.user_state = {"level": 30}
+    runtime.settings = {"strategy": "preferred", "preferredSeedId": 0, "automation": {"fertilizer": "none"}}
+    runtime.operations = {}
+    runtime.logger = None
+    runtime.log_callback = None
+    runtime.warehouse = SimpleNamespace(
+        get_bag=AsyncMock(return_value="bag"),
+        get_bag_items=lambda _bag: [SimpleNamespace(id=40001, count=3)],
+    )
+    runtime.farm = SimpleNamespace(
+        remove_plant=AsyncMock(return_value=None),
+        choose_seed=AsyncMock(return_value=None),
+        get_available_seeds=AsyncMock(
+            return_value=[
+                {"seedId": 40001, "goodsId": 9001, "price": 30, "requiredLevel": 10, "locked": False, "soldOut": True},
+            ]
+        ),
+        buy_goods=AsyncMock(return_value=SimpleNamespace(get_items=[])),
+        plant=AsyncMock(return_value=2),
+        fertilize=AsyncMock(return_value=0),
+    )
+
+    planted = await runtime._auto_plant([], [1, 2])
+
+    assert planted == 2
+    runtime.farm.choose_seed.assert_awaited_once()
+    runtime.farm.get_available_seeds.assert_awaited_once()
+    runtime.farm.buy_goods.assert_not_called()
+    runtime.farm.plant.assert_awaited_once_with(40001, [1, 2])
 
 
 @pytest.mark.asyncio

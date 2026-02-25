@@ -70,6 +70,8 @@ pip install -r requirements-dev.txt
 
 6. 设置自动播种参数（关键）
 - 指定种子：`qfarm 设置 种子 <seedId>`
+- `v2.4.6` 起会严格校验：仅允许“已解锁且未售罄”的种子，商店数据不可用时会拒绝设置。
+- `v2.4.6` 起设置成功后会立即触发一次 `plant` 校验，回包直接显示本次种植结果。
 - 缩短农场周期（便于观察）：`qfarm 设置 间隔 农场 2 2`
 - 立即种空地：`qfarm 种满`（等价 `qfarm 农田 操作 plant`）
 
@@ -118,6 +120,8 @@ pip install -r requirements-dev.txt
 - `qfarm 日志` 默认告警优先（`isWarn=1`）且默认最近 20 条。
 - `qfarm 日志 详细` 默认展示全级别且默认最近 50 条。
 - `qfarm 帮助` 默认模块索引；`qfarm 帮助 <模块>` 查看二级帮助；`qfarm 帮助 详细` 查看完整清单。
+- `v2.4.6` 起短文本默认不转图片；`qfarm 种子 列表` 固定文本输出。
+- `v2.4.6` 起若图片渲染将产生多页（`payloads > 1`），会自动回退文本，避免一条命令连发多图。
 
 ## 多用户并发策略（新增）
 
@@ -330,7 +334,13 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.4.5
+- Current release: v2.4.6
+- 2026-02-25 v2.4.6
+- Reason: fix the user-visible reliability regression where auto-plant looked enabled but silently skipped, and reduce one-command multi-image spam in group chat.
+- Change: add bag-stock fallback seed selection when shop candidates are exhausted; enforce strict seed validation in `qfarm 设置 种子` (`locked/soldOut/unknownMeta` now blocked) and trigger immediate `plant` verification after saving; expose `lastFarm.plantTargetCount` diagnostics; only mark long replies for image rendering; fallback to plain text when render payload would paginate; remove repeated stats on non-first render pages.
+- Impact: auto-plant can continue when shop shows sold-out but bag still has seeds; invalid seed settings are blocked upfront; `状态 详细` gives clearer planting diagnostics; output noise is reduced with single-response preference.
+- Risk: strict seed validation may reject settings when shop metadata is temporarily unavailable; users should retry later instead of forcing unknown seed IDs.
+- Verification: `PYTHONPATH=d:\\botproject python -m pytest tests/test_runtime_auto_farm_harvest.py tests/test_runtime_account_v245.py tests/test_command_router_render_flag.py tests/test_command_router_status_simplified.py tests/test_command_router_settings_seed_strict.py tests/test_render_payload_builder.py tests/test_main_render_fallback.py -q` passed (`31 passed`).
 - 2026-02-25 v2.4.5
 - Reason: close the user-reported stability cluster (`自动种植不执行/状态调度误导/点券负值误解/查询链路静默失败`) and harden local persistence consistency.
 - Change: fixed `BasicNotify` level overwrite (`level<=0` is now ignored), added level floor for auto-plant seed selection, switched status countdown to `ceil`, refined verbose scheduler message, added `lastFarm` diagnostics, changed session text to “会话净变化” with negative coupon explanation, hardened `account unbind` to keep local binding on remote delete failure, made friend/task query failures explicit, and added locks/atomic write improvements for `state_store` + runtime log persistence.

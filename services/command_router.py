@@ -925,8 +925,33 @@ class QFarmCommandRouter:
             seed_id = int(args[1])
             if seed_id < 0:
                 return [RouterReply(text="seedId 必须 >= 0。")]
+            seeds = await self.api.get_seeds(account_id)
+            if not isinstance(seeds, list) or not seeds:
+                return [RouterReply(text="当前无法校验种子可用性（商店数据为空），请稍后重试。")]
+            target_seed: dict[str, Any] | None = None
+            for row in seeds:
+                if not isinstance(row, dict):
+                    continue
+                if self._safe_int(row.get("seedId"), 0) == seed_id:
+                    target_seed = row
+                    break
+            if target_seed is None:
+                return [RouterReply(text=f"seedId={seed_id} 不在当前种子列表中。请先执行 qfarm 种子 列表")]
+            if bool(target_seed.get("unknownMeta")):
+                return [RouterReply(text="当前商店数据不可用，无法严格校验该 seedId，请稍后重试。")]
+            if bool(target_seed.get("locked")):
+                return [RouterReply(text=f"seedId={seed_id} 当前未解锁，无法设置为偏好种子。")]
+            if bool(target_seed.get("soldOut")):
+                return [RouterReply(text=f"seedId={seed_id} 当前已售罄，无法设置为偏好种子。")]
             await self.api.save_settings(account_id, {"seedId": seed_id})
-            return [RouterReply(text=f"偏好种子已更新: {seed_id}")]
+            lines = [f"偏好种子已更新: {seed_id}", "已立即触发一次种植校验。"]
+            try:
+                result = await self.api.do_farm_operation(account_id, "plant")
+                lines.append(self._format_farm_op_result("plant", result))
+            except Exception as e:
+                lines.append(f"种植校验失败: {e}")
+                lines.append("提示: 设置已生效，可稍后执行 qfarm 状态 详细 / qfarm 农田 操作 plant 复查。")
+            return [RouterReply(text="\n".join(lines))]
 
         if sub in {"间隔", "interval"}:
             if len(args) < 4:
@@ -1687,9 +1712,20 @@ class QFarmCommandRouter:
                 continue
             if not reply.text:
                 continue
-            if self._is_normal_reply_text(reply.text):
+            if self._is_normal_reply_text(reply.text) and self._should_prefer_image(reply.text):
                 reply.prefer_image = True
         return replies
+
+    def _should_prefer_image(self, text: str) -> bool:
+        content = str(text or "").strip()
+        if not content:
+            return False
+        if content.startswith("【种子列表】"):
+            return False
+        line_count = content.count("\n") + 1
+        if line_count <= 10 and len(content) <= 260:
+            return False
+        return True
 
     def _is_normal_reply_text(self, text: str) -> bool:
         content = str(text or "").strip()
@@ -1809,9 +1845,15 @@ class QFarmCommandRouter:
             lines.append("调度说明: 已到时，等待调度槽位（1s轮询）。")
         else:
             lines.append("调度说明: 倒计时结束后会自动执行对应巡查。")
-        last_farm_reason = self._extract_last_farm_reason(data.get("lastFarm"))
+        last_farm = data.get("lastFarm") if isinstance(data.get("lastFarm"), dict) else {}
+        last_farm_reason = self._extract_last_farm_reason(last_farm)
         if last_farm_reason:
             lines.append(f"最近农田说明: {last_farm_reason}")
+        if isinstance(last_farm, dict):
+            target_count = self._safe_int(last_farm.get("plantTargetCount"), 0)
+            planted_count = self._safe_int(last_farm.get("plantedCount"), 0)
+            if target_count > 0 or planted_count > 0 or last_farm_reason:
+                lines.append(f"最近种植诊断: target={max(0, target_count)} planted={max(0, planted_count)}")
         if last_error:
             lines.append(f"最近启动错误: {last_error}")
 

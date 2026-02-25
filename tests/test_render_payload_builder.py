@@ -38,6 +38,15 @@ def test_build_payload_logs_use_small_page_size():
     assert pages[2]["page"] == {"index": 3, "total": 3}
 
 
+def test_build_payload_multi_page_only_first_page_has_stats():
+    lines = ["【状态】", "概览摘要", "金币: 1000", "经验: 200"] + [f"- row {i}" for i in range(30)]
+    text = "\n".join(lines)
+    pages = build_qfarm_payload_pages(text, theme="light")
+    assert len(pages) >= 2
+    assert pages[0]["stats"]
+    assert pages[1]["stats"] == []
+
+
 def test_should_render_qfarm_image_text_only_cases():
     assert should_render_qfarm_image("用法: qfarm 状态") is False
     assert should_render_qfarm_image("操作失败: 账号未运行\n建议: qfarm 账号 启动") is False

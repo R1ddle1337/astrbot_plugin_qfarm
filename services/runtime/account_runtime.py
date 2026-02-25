@@ -151,6 +151,7 @@ class AccountRuntime:
         self._last_plant_skip_reason = ""
         self._last_farm_result = {
             "mode": "",
+            "plantTargetCount": 0,
             "plantedCount": 0,
             "noActionReason": "",
             "plantSkipReason": "",
@@ -270,6 +271,7 @@ class AccountRuntime:
             },
             "lastFarm": {
                 "mode": str(last_farm.get("mode") or ""),
+                "plantTargetCount": max(0, _to_int(last_farm.get("plantTargetCount"), 0)),
                 "plantedCount": max(0, _to_int(last_farm.get("plantedCount"), 0)),
                 "noActionReason": str(last_farm.get("noActionReason") or ""),
                 "plantSkipReason": str(last_farm.get("plantSkipReason") or ""),
@@ -1249,6 +1251,7 @@ class AccountRuntime:
         }
         self._last_farm_result = {
             "mode": mode,
+            "plantTargetCount": plant_target_count,
             "plantedCount": planted_count,
             "noActionReason": no_action_reason,
             "plantSkipReason": plant_skip_reason,
@@ -1285,11 +1288,21 @@ class AccountRuntime:
         if not lands_to_plant:
             self._last_plant_skip_reason = "没有可种植的有效地块"
             return 0
+        current_level = max(1, _to_int(self.user_state["level"]))
         seed = await self.farm.choose_seed(
-            current_level=max(1, _to_int(self.user_state["level"])),
+            current_level=current_level,
             strategy=str(self.settings.get("strategy") or "preferred"),
             preferred_seed_id=_to_int(self.settings.get("preferredSeedId"), 0),
         )
+        if not seed:
+            self._debug_log(
+                "farm",
+                "seed pick failed from shop candidates, try bag fallback",
+                module="farm",
+                event="seed_pick_failed",
+                targetCount=len(lands_to_plant),
+            )
+            seed = await self._pick_seed_from_bag(current_level=current_level)
         if not seed:
             self._last_plant_skip_reason = "没有可用种子（请先执行 qfarm 种子 列表 / qfarm 设置 种子 <seedId>）"
             self._debug_log(
@@ -1304,7 +1317,8 @@ class AccountRuntime:
         goods_id = _to_int(seed.get("goodsId"), 0)
         price = _to_int(seed.get("price"), 0)
         target_count = len(lands_to_plant)
-        seed_stock = await self._get_seed_stock(seed_id)
+        seed_stock_override = _to_int(seed.get("_bagStock"), -1)
+        seed_stock = seed_stock_override if seed_stock_override >= 0 else await self._get_seed_stock(seed_id)
         buy_count = target_count
         if seed_stock is not None:
             buy_count = 0
@@ -1426,6 +1440,69 @@ class AccountRuntime:
             if mode in {"organic", "both"}:
                 self._record("fertilize", await self.farm.fertilize(planted_ids, 1012))
         return planted
+
+    async def _pick_seed_from_bag(self, *, current_level: int) -> dict[str, Any] | None:
+        try:
+            seeds = await self.farm.get_available_seeds(current_level=max(1, _to_int(current_level, 1)))
+        except Exception as e:
+            self._debug_log(
+                "farm",
+                f"seed pick fallback failed: {e}",
+                module="farm",
+                event="seed_pick_failed",
+                reason="get_available_seeds_failed",
+            )
+            return None
+        warehouse = getattr(self, "warehouse", None)
+        if not warehouse or not hasattr(warehouse, "get_bag") or not hasattr(warehouse, "get_bag_items"):
+            return None
+        try:
+            bag = await warehouse.get_bag()
+            items = warehouse.get_bag_items(bag)
+        except Exception as e:
+            self._debug_log(
+                "farm",
+                f"seed pick fallback failed: {e}",
+                module="farm",
+                event="seed_pick_failed",
+                reason="get_bag_failed",
+            )
+            return None
+        stock_by_seed: dict[int, int] = {}
+        for item in list(items or []):
+            seed_id = _to_int(getattr(item, "id", 0), 0)
+            if seed_id <= 0:
+                continue
+            stock_by_seed[seed_id] = _to_int(stock_by_seed.get(seed_id), 0) + max(0, _to_int(getattr(item, "count", 0), 0))
+        preferred_seed_id = max(0, _to_int(self.settings.get("preferredSeedId"), 0))
+        candidates: list[tuple[int, int, int, dict[str, Any]]] = []
+        for row in list(seeds or []):
+            if not isinstance(row, dict):
+                continue
+            seed_id = _to_int(row.get("seedId"), 0)
+            if seed_id <= 0:
+                continue
+            if bool(row.get("locked")):
+                continue
+            stock = max(0, _to_int(stock_by_seed.get(seed_id), 0))
+            if stock <= 0:
+                continue
+            required_level = max(0, _to_int(row.get("requiredLevel"), 0))
+            candidates.append((0 if seed_id == preferred_seed_id else 1, -required_level, -seed_id, dict(row)))
+        if not candidates:
+            return None
+        candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        selected = dict(candidates[0][3])
+        selected["_bagStock"] = max(0, _to_int(stock_by_seed.get(_to_int(selected.get("seedId"), 0)), 0))
+        self._debug_log(
+            "farm",
+            "seed picked from bag fallback",
+            module="farm",
+            event="seed_pick_from_bag",
+            seedId=_to_int(selected.get("seedId"), 0),
+            stock=_to_int(selected.get("_bagStock"), 0),
+        )
+        return selected
 
     async def _get_seed_stock(self, seed_id: int) -> int | None:
         if seed_id <= 0:
