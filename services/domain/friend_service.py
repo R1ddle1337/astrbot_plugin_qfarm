@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any
@@ -8,6 +9,8 @@ from typing import Any
 from ..protocol.session import GatewaySession
 from ..protocol.proto import friendpb_pb2, plantpb_pb2, visitpb_pb2
 from .config_data import GameConfigData
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _to_int(value: Any, default: int = 0) -> int:
@@ -240,8 +243,15 @@ class FriendService:
             reply = plantpb_pb2.CheckCanOperateReply()
             reply.ParseFromString(body)
             return bool(reply.can_operate), _to_int(reply.can_steal_num, 0)
-        except Exception:
-            return True, 0
+        except Exception as e:
+            LOGGER.warning(
+                "check_can_operate_remote failed, deny operation: friend_gid=%s, operation_id=%s, error=%s",
+                _to_int(friend_gid, 0),
+                _to_int(operation_id, 0),
+                e,
+            )
+            LOGGER.debug("check_can_operate_remote traceback", exc_info=True)
+            return False, 0
 
     def update_operation_limits(self, limits: list[plantpb_pb2.OperationLimit]) -> None:
         if not limits:
@@ -352,10 +362,7 @@ class FriendService:
         return result
 
     async def get_friends_list(self, my_gid: int) -> list[dict[str, Any]]:
-        try:
-            reply = await self.get_all_friends()
-        except Exception:
-            return []
+        reply = await self.get_all_friends()
         rows: list[dict[str, Any]] = []
         for friend in reply.game_friends:
             gid = _to_int(friend.gid, 0)

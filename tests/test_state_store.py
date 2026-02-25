@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from astrbot_plugin_qfarm.services.state_store import QFarmStateStore
@@ -60,3 +61,48 @@ def test_state_store_save_is_atomic_without_tmp_residue(tmp_path: Path):
 
     bindings = json.loads((tmp_path / "bindings_v2.json").read_text(encoding="utf-8"))
     assert bindings["owners"]["u1"]["account_id"] == "acc-1"
+
+
+def test_load_corrupt_json_creates_backup_then_resets_default(tmp_path: Path, monkeypatch):
+    broken = '{"owners": '
+    bindings_path = tmp_path / "bindings_v2.json"
+    bindings_path.write_text(broken, encoding="utf-8")
+
+    monkeypatch.setattr(
+        "astrbot_plugin_qfarm.services.state_store.time.time",
+        lambda: 1700000000,
+    )
+
+    QFarmStateStore(tmp_path)
+
+    backup = tmp_path / "bindings_v2.corrupt-1700000000.json"
+    assert backup.exists()
+    assert backup.read_text(encoding="utf-8") == broken
+
+    repaired = json.loads(bindings_path.read_text(encoding="utf-8"))
+    assert repaired == {"owners": {}, "accountOwners": {}}
+
+
+def test_concurrent_binding_writes_remain_parseable_and_not_lost(tmp_path: Path):
+    store = QFarmStateStore(tmp_path)
+    total = 24
+
+    def worker(index: int) -> None:
+        store.bind_account(f"user-{index}", f"acc-{index}", f"name-{index}")
+
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = [executor.submit(worker, i) for i in range(total)]
+        for future in futures:
+            future.result(timeout=10)
+
+    content = (tmp_path / "bindings_v2.json").read_text(encoding="utf-8")
+    payload = json.loads(content)
+
+    assert isinstance(payload, dict)
+    assert len(payload["owners"]) == total
+    assert len(payload["accountOwners"]) == total
+    for i in range(total):
+        uid = f"user-{i}"
+        aid = f"acc-{i}"
+        assert payload["owners"][uid]["account_id"] == aid
+        assert payload["accountOwners"][aid] == uid

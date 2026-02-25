@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -24,7 +27,7 @@ def _normalize_id_list(values: Any) -> list[str]:
 
 
 class QFarmStateStore:
-    """插件本地状态持久化：绑定关系、白名单、渲染主题。"""
+    """Plugin local state persistence for bindings, whitelist, and theme."""
 
     def __init__(
         self,
@@ -41,6 +44,10 @@ class QFarmStateStore:
 
         self._static_allowed_users = _normalize_id_list(static_allowed_users or [])
         self._static_allowed_groups = _normalize_id_list(static_allowed_groups or [])
+
+        self._owner_bindings_lock = threading.RLock()
+        self._whitelist_lock = threading.RLock()
+        self._runtime_secret_lock = threading.RLock()
 
         self._owner_bindings = self._load_json(
             self.owner_bindings_path,
@@ -76,8 +83,9 @@ class QFarmStateStore:
         normalized = str(theme or "").strip().lower()
         if normalized not in ALLOWED_RENDER_THEMES:
             raise ValueError("theme 仅支持 dark|light")
-        self._runtime_secret["render_theme"] = normalized
-        self._save_json(self.runtime_secret_path, self._runtime_secret)
+        with self._runtime_secret_lock:
+            self._runtime_secret["render_theme"] = normalized
+            self._save_json(self.runtime_secret_path, self._runtime_secret)
         return normalized
 
     def get_bound_account(self, user_id: str | int) -> str | None:
@@ -112,53 +120,59 @@ class QFarmStateStore:
         aid = _normalize_id(account_id)
         if not uid or not aid:
             raise ValueError("user_id 和 account_id 不能为空")
-        owners = self._owner_bindings.setdefault("owners", {})
-        account_owners = self._owner_bindings.setdefault("accountOwners", {})
-        if not isinstance(owners, dict):
-            owners = {}
-            self._owner_bindings["owners"] = owners
-        if not isinstance(account_owners, dict):
-            account_owners = {}
-            self._owner_bindings["accountOwners"] = account_owners
 
-        existed_owner = _normalize_id(account_owners.get(aid))
-        if existed_owner and existed_owner != uid:
-            raise ValueError(f"账号 {aid} 已被用户 {existed_owner} 绑定，当前策略禁止共享账号")
+        with self._owner_bindings_lock:
+            owners = self._owner_bindings.setdefault("owners", {})
+            account_owners = self._owner_bindings.setdefault("accountOwners", {})
+            if not isinstance(owners, dict):
+                owners = {}
+                self._owner_bindings["owners"] = owners
+            if not isinstance(account_owners, dict):
+                account_owners = {}
+                self._owner_bindings["accountOwners"] = account_owners
 
-        old_info = owners.get(uid, {}) if isinstance(owners.get(uid), dict) else {}
-        old_aid = _normalize_id(old_info.get("account_id"))
-        if old_aid and old_aid != aid and _normalize_id(account_owners.get(old_aid)) == uid:
-            account_owners.pop(old_aid, None)
+            existed_owner = _normalize_id(account_owners.get(aid))
+            if existed_owner and existed_owner != uid:
+                raise ValueError(f"账号 {aid} 已被用户 {existed_owner} 绑定，当前策略禁止共享账号")
 
-        self._owner_bindings["owners"][uid] = {
-            "account_id": aid,
-            "account_name": str(account_name or ""),
-            "updated_at": int(time.time()),
-        }
-        self._owner_bindings["accountOwners"][aid] = uid
-        self._save_json(self.owner_bindings_path, self._owner_bindings)
+            old_info = owners.get(uid, {}) if isinstance(owners.get(uid), dict) else {}
+            old_aid = _normalize_id(old_info.get("account_id"))
+            if old_aid and old_aid != aid and _normalize_id(account_owners.get(old_aid)) == uid:
+                account_owners.pop(old_aid, None)
+
+            self._owner_bindings["owners"][uid] = {
+                "account_id": aid,
+                "account_name": str(account_name or ""),
+                "updated_at": int(time.time()),
+            }
+            self._owner_bindings["accountOwners"][aid] = uid
+            self._save_json(self.owner_bindings_path, self._owner_bindings)
 
     def unbind_account(self, user_id: str | int) -> str | None:
         uid = _normalize_id(user_id)
         if not uid:
             return None
-        info = self._owner_bindings["owners"].pop(uid, None)
-        if isinstance(info, dict):
-            aid = _normalize_id(info.get("account_id"))
-            if aid and _normalize_id(self._owner_bindings.get("accountOwners", {}).get(aid)) == uid:
-                self._owner_bindings["accountOwners"].pop(aid, None)
-        self._save_json(self.owner_bindings_path, self._owner_bindings)
+
+        with self._owner_bindings_lock:
+            info = self._owner_bindings["owners"].pop(uid, None)
+            if isinstance(info, dict):
+                aid = _normalize_id(info.get("account_id"))
+                if aid and _normalize_id(self._owner_bindings.get("accountOwners", {}).get(aid)) == uid:
+                    self._owner_bindings["accountOwners"].pop(aid, None)
+            self._save_json(self.owner_bindings_path, self._owner_bindings)
+
         if isinstance(info, dict):
             account_id = _normalize_id(info.get("account_id"))
             return account_id or None
         return None
 
     def set_whitelist(self, users: list[str], groups: list[str]) -> None:
-        self._whitelist = {
-            "users": _normalize_id_list(users),
-            "groups": _normalize_id_list(groups),
-        }
-        self._save_json(self.whitelist_path, self._whitelist)
+        with self._whitelist_lock:
+            self._whitelist = {
+                "users": _normalize_id_list(users),
+                "groups": _normalize_id_list(groups),
+            }
+            self._save_json(self.whitelist_path, self._whitelist)
 
     def list_whitelist_users(self) -> list[str]:
         merged = []
@@ -184,45 +198,53 @@ class QFarmStateStore:
         uid = _normalize_id(user_id)
         if not uid:
             return False
-        users = self._whitelist.get("users", [])
-        if uid in users:
-            return False
-        users.append(uid)
-        self._whitelist["users"] = _normalize_id_list(users)
-        self._save_json(self.whitelist_path, self._whitelist)
-        return True
+
+        with self._whitelist_lock:
+            users = self._whitelist.get("users", [])
+            if uid in users:
+                return False
+            users.append(uid)
+            self._whitelist["users"] = _normalize_id_list(users)
+            self._save_json(self.whitelist_path, self._whitelist)
+            return True
 
     def remove_whitelist_user(self, user_id: str | int) -> bool:
         uid = _normalize_id(user_id)
-        users = self._whitelist.get("users", [])
-        if uid not in users:
-            return False
-        users = [value for value in users if value != uid]
-        self._whitelist["users"] = users
-        self._save_json(self.whitelist_path, self._whitelist)
-        return True
+
+        with self._whitelist_lock:
+            users = self._whitelist.get("users", [])
+            if uid not in users:
+                return False
+            users = [value for value in users if value != uid]
+            self._whitelist["users"] = users
+            self._save_json(self.whitelist_path, self._whitelist)
+            return True
 
     def add_whitelist_group(self, group_id: str | int) -> bool:
         gid = _normalize_id(group_id)
         if not gid:
             return False
-        groups = self._whitelist.get("groups", [])
-        if gid in groups:
-            return False
-        groups.append(gid)
-        self._whitelist["groups"] = _normalize_id_list(groups)
-        self._save_json(self.whitelist_path, self._whitelist)
-        return True
+
+        with self._whitelist_lock:
+            groups = self._whitelist.get("groups", [])
+            if gid in groups:
+                return False
+            groups.append(gid)
+            self._whitelist["groups"] = _normalize_id_list(groups)
+            self._save_json(self.whitelist_path, self._whitelist)
+            return True
 
     def remove_whitelist_group(self, group_id: str | int) -> bool:
         gid = _normalize_id(group_id)
-        groups = self._whitelist.get("groups", [])
-        if gid not in groups:
-            return False
-        groups = [value for value in groups if value != gid]
-        self._whitelist["groups"] = groups
-        self._save_json(self.whitelist_path, self._whitelist)
-        return True
+
+        with self._whitelist_lock:
+            groups = self._whitelist.get("groups", [])
+            if gid not in groups:
+                return False
+            groups = [value for value in groups if value != gid]
+            self._whitelist["groups"] = groups
+            self._save_json(self.whitelist_path, self._whitelist)
+            return True
 
     def is_user_allowed(self, user_id: str | int) -> bool:
         uid = _normalize_id(user_id)
@@ -240,21 +262,61 @@ class QFarmStateStore:
         if not path.exists():
             self._save_json(path, default)
             return json.loads(json.dumps(default))
+
         try:
             with path.open("r", encoding="utf-8") as f:
                 data = json.load(f)
             if isinstance(data, dict):
                 return data
+            raise ValueError("json root must be object")
         except Exception:
-            pass
+            self._backup_corrupt_json(path)
+
         self._save_json(path, default)
         return json.loads(json.dumps(default))
 
     def _save_json(self, path: Path, data: dict[str, Any]) -> None:
-        tmp = path.with_suffix(path.suffix + ".tmp")
-        with tmp.open("w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        tmp.replace(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            dir=str(path.parent),
+        )
+        tmp_path = Path(tmp_name)
+
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_path, path)
+        finally:
+            if tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+
+    def _backup_corrupt_json(self, path: Path) -> None:
+        try:
+            raw_data = path.read_bytes()
+        except Exception:
+            return
+
+        backup_path = self._build_corrupt_backup_path(path, int(time.time()))
+        try:
+            backup_path.write_bytes(raw_data)
+        except Exception:
+            return
+
+    def _build_corrupt_backup_path(self, path: Path, timestamp: int) -> Path:
+        base_name = f"{path.stem}.corrupt-{timestamp}"
+        candidate = path.with_name(f"{base_name}{path.suffix}")
+        index = 1
+        while candidate.exists():
+            candidate = path.with_name(f"{base_name}-{index}{path.suffix}")
+            index += 1
+        return candidate
 
     def _normalize_owner_bindings(self, raw: dict[str, Any]) -> dict[str, Any]:
         owners_raw = raw.get("owners", {}) if isinstance(raw, dict) else {}

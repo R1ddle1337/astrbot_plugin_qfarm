@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from astrbot_plugin_qfarm.services.command_router import QFarmCommandRouter
+from astrbot_plugin_qfarm.services.api_client import QFarmApiError
 from astrbot_plugin_qfarm.services.rate_limiter import RateLimiter
 from astrbot_plugin_qfarm.services.state_store import QFarmStateStore
 
@@ -44,3 +45,23 @@ def test_error_template_internal_uses_internal_code(tmp_path: Path):
     text = router._format_failure_message("命令执行异常", "boom", internal=True)
     assert text.startswith("命令执行异常:")
     assert "[E_INTERNAL]" in text
+
+
+def test_api_failure_message_for_session_disconnected_contains_rebind_code_hint(tmp_path: Path):
+    router = _build_router(tmp_path)
+    text = router._format_api_failure_message(
+        "操作失败",
+        QFarmApiError("session disconnected", code="session_disconnected", source="runtime"),
+    )
+    assert "[session_disconnected]" in text
+    assert "建议: code 可能失效，请重新扫码绑定" in text
+
+
+def test_api_failure_message_for_auth_invalid_contains_rebind_code_hint(tmp_path: Path):
+    router = _build_router(tmp_path)
+    text = router._format_api_failure_message(
+        "操作失败",
+        QFarmApiError("网关鉴权失败", code="auth_invalid", source="runtime"),
+    )
+    assert "[auth_invalid]" in text
+    assert "建议: code 可能失效，请重新扫码绑定" in text

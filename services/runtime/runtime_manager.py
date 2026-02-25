@@ -4,6 +4,7 @@ import asyncio
 import ipaddress
 import json
 import re
+import threading
 import time
 from collections import deque
 from pathlib import Path
@@ -262,6 +263,7 @@ class QFarmRuntimeManager:
         self._runtime_logs_dirty = False
         self._runtime_logs_pending = 0
         self._runtime_logs_last_flush_at = time.monotonic()
+        self._runtime_logs_lock = threading.Lock()
         self._load_persisted_runtime_logs()
         self._state_lock = asyncio.Lock()
         self._runtime_status_lock = asyncio.Lock()
@@ -805,8 +807,10 @@ class QFarmRuntimeManager:
         return {"ui": {"theme": value}}
 
     async def get_logs(self, account_id: str | int, **filters: Any) -> list[dict[str, Any]]:
-        if self._runtime_logs_dirty:
-            self._persist_runtime_logs()
+        with self._runtime_logs_lock:
+            if self._runtime_logs_dirty:
+                self._persist_runtime_logs_locked()
+            rows = list(self._global_logs)
         account_id_text = str(account_id or "").strip()
         limit = max(1, min(300, _to_int(filters.get("limit"), 100)))
         keyword = str(filters.get("keyword") or "").strip().lower()
@@ -815,7 +819,6 @@ class QFarmRuntimeManager:
         is_warn_raw = str(filters.get("isWarn") or "").strip()
         has_warn_filter = is_warn_raw in {"0", "1", "true", "false"}
         warn_expect = is_warn_raw in {"1", "true"}
-        rows = list(self._global_logs)
         if account_id_text:
             rows = [row for row in rows if str(row.get("accountId") or "") == account_id_text]
         if keyword:
@@ -829,10 +832,12 @@ class QFarmRuntimeManager:
         return list(reversed(rows[-limit:]))
 
     async def get_account_logs(self, limit: int = 100) -> list[dict[str, Any]]:
-        if self._runtime_logs_dirty:
-            self._persist_runtime_logs()
+        with self._runtime_logs_lock:
+            if self._runtime_logs_dirty:
+                self._persist_runtime_logs_locked()
+            rows = list(self._account_logs)
         safe = max(1, min(300, _to_int(limit, 100)))
-        return list(reversed(self._account_logs[-safe:]))
+        return list(reversed(rows[-safe:]))
 
     async def debug_sell(self, account_id: str | int) -> dict[str, Any]:
         return await self._require_runtime(account_id).debug_sell()
@@ -1563,10 +1568,11 @@ class QFarmRuntimeManager:
             "ts": int(time.time() * 1000),
         }
         entry["_searchText"] = f"{entry['msg']} {entry['tag']} {json.dumps(entry['meta'], ensure_ascii=False)}".lower()
-        self._global_logs.append(entry)
-        if len(self._global_logs) > self.runtime_log_max_entries:
-            self._global_logs = self._global_logs[-self.runtime_log_max_entries :]
-        self._schedule_runtime_logs_persist()
+        with self._runtime_logs_lock:
+            self._global_logs.append(entry)
+            if len(self._global_logs) > self.runtime_log_max_entries:
+                self._global_logs = self._global_logs[-self.runtime_log_max_entries :]
+            self._schedule_runtime_logs_persist_locked()
         try:
             if self._should_auto_push_entry(entry):
                 self._schedule_auto_push(entry)
@@ -1602,11 +1608,12 @@ class QFarmRuntimeManager:
             "accountName": str(account_name or ""),
         }
         row.update(extra)
-        self._account_logs.append(row)
-        account_log_max = max(300, min(2000, self.runtime_log_max_entries))
-        if len(self._account_logs) > account_log_max:
-            self._account_logs = self._account_logs[-account_log_max:]
-        self._schedule_runtime_logs_persist()
+        with self._runtime_logs_lock:
+            self._account_logs.append(row)
+            account_log_max = max(300, min(2000, self.runtime_log_max_entries))
+            if len(self._account_logs) > account_log_max:
+                self._account_logs = self._account_logs[-account_log_max:]
+            self._schedule_runtime_logs_persist_locked()
 
     def _log(self, tag: str, message: str, *, is_warn: bool = False, **meta: Any) -> None:
         if self.logger:
@@ -1659,13 +1666,18 @@ class QFarmRuntimeManager:
         account_log_max = max(300, min(2000, self.runtime_log_max_entries))
         if len(account_logs) > account_log_max:
             account_logs = account_logs[-account_log_max:]
-        self._global_logs = global_logs
-        self._account_logs = account_logs
-        self._runtime_logs_dirty = False
-        self._runtime_logs_pending = 0
-        self._runtime_logs_last_flush_at = time.monotonic()
+        with self._runtime_logs_lock:
+            self._global_logs = global_logs
+            self._account_logs = account_logs
+            self._runtime_logs_dirty = False
+            self._runtime_logs_pending = 0
+            self._runtime_logs_last_flush_at = time.monotonic()
 
     def _schedule_runtime_logs_persist(self) -> None:
+        with self._runtime_logs_lock:
+            self._schedule_runtime_logs_persist_locked()
+
+    def _schedule_runtime_logs_persist_locked(self) -> None:
         if not self.persist_runtime_logs:
             return
         self._runtime_logs_dirty = True
@@ -1676,9 +1688,13 @@ class QFarmRuntimeManager:
             or elapsed >= self.runtime_log_flush_interval_sec
         )
         if should_flush:
-            self._persist_runtime_logs()
+            self._persist_runtime_logs_locked()
 
     def _persist_runtime_logs(self, *, force: bool = False) -> None:
+        with self._runtime_logs_lock:
+            self._persist_runtime_logs_locked(force=force)
+
+    def _persist_runtime_logs_locked(self, *, force: bool = False) -> None:
         if not self.persist_runtime_logs:
             return
         if not force and not self._runtime_logs_dirty:
@@ -1689,11 +1705,20 @@ class QFarmRuntimeManager:
         }
         try:
             self._save_json_atomic(self.runtime_logs_path, payload)
-        except Exception:
+        except Exception as e:
+            self._warn_runtime_logs_persist_failed(e)
             return
         self._runtime_logs_dirty = False
         self._runtime_logs_pending = 0
         self._runtime_logs_last_flush_at = time.monotonic()
+
+    def _warn_runtime_logs_persist_failed(self, error: Exception) -> None:
+        if not self.logger or not hasattr(self.logger, "warning"):
+            return
+        try:
+            self.logger.warning(f"[qfarm-runtime] [runtime_logs] persist failed: {error}")
+        except Exception:
+            return
 
     @staticmethod
     def _load_json(path: Path, default: dict[str, Any]) -> dict[str, Any]:

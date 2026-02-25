@@ -64,8 +64,8 @@ class TaskService:
     async def get_all_tasks(self) -> dict[str, list[dict[str, Any]]]:
         try:
             reply = await self.get_task_info()
-        except Exception:
-            return {"daily": [], "growth": [], "main": []}
+        except Exception as e:
+            raise RuntimeError(f"get_all_tasks failed: {e}") from e
         if not reply.HasField("task_info"):
             return {"daily": [], "growth": [], "main": []}
         task_info = reply.task_info

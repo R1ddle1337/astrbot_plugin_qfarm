@@ -84,6 +84,12 @@ async def test_do_farm_operation_all_triggers_harvest_and_plant_flow():
     runtime._auto_sell.assert_awaited_once()
     assert runtime.operations.get("harvest") == 2
     assert result["hadWork"] is True
+    assert runtime._last_farm_result == {
+        "mode": "all",
+        "plantedCount": 3,
+        "noActionReason": "",
+        "plantSkipReason": "",
+    }
 
 
 @pytest.mark.asyncio
@@ -216,6 +222,33 @@ async def test_auto_plant_continues_when_buy_goods_failed():
     runtime.farm.buy_goods.assert_awaited_once_with(5566, 1, 88)
     runtime.farm.plant.assert_awaited_once_with(1002, [9])
     assert runtime.operations.get("plant") == 1
+
+
+@pytest.mark.asyncio
+async def test_auto_plant_choose_seed_uses_level_floor_one():
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.account = {"id": "acc-1"}
+    runtime.user_state = {"level": 0}
+    runtime.settings = {"strategy": "preferred", "preferredSeedId": 0, "automation": {"fertilizer": "none"}}
+    runtime.operations = {}
+    runtime.logger = None
+    runtime.log_callback = None
+    runtime.farm = SimpleNamespace(
+        remove_plant=AsyncMock(return_value=None),
+        choose_seed=AsyncMock(return_value=None),
+        buy_goods=AsyncMock(return_value={}),
+        plant=AsyncMock(return_value=0),
+        fertilize=AsyncMock(return_value=0),
+    )
+
+    planted = await runtime._auto_plant([], [9])
+
+    assert planted == 0
+    runtime.farm.choose_seed.assert_awaited_once_with(
+        current_level=1,
+        strategy="preferred",
+        preferred_seed_id=0,
+    )
 
 
 @pytest.mark.asyncio

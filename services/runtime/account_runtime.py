@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import math
 import random
 import time
 from typing import Any, Awaitable, Callable
@@ -148,6 +149,12 @@ class AccountRuntime:
         self._invite_processed = False
         self._invite_task: asyncio.Task | None = None
         self._last_plant_skip_reason = ""
+        self._last_farm_result = {
+            "mode": "",
+            "plantedCount": 0,
+            "noActionReason": "",
+            "plantSkipReason": "",
+        }
         self._daily_routines = self._normalize_daily_routines(self.settings.get("dailyRoutines"))
         self.heartbeat_fail_limit = max(
             1,
@@ -234,6 +241,7 @@ class AccountRuntime:
 
     async def get_status(self) -> dict[str, Any]:
         exp_progress = self.config_data.get_level_exp_progress(_to_int(self.user_state["level"]), _to_int(self.user_state["exp"]))
+        last_farm = self._last_farm_result if isinstance(getattr(self, "_last_farm_result", None), dict) else {}
         return {
             "connection": {"connected": bool(self.connected and self.login_ready and self.session.connected)},
             "status": {
@@ -257,8 +265,14 @@ class AccountRuntime:
             "expProgress": exp_progress,
             "configRevision": self.settings_revision,
             "nextChecks": {
-                "farmRemainSec": max(0, int(self._next_farm_at - time.time())),
-                "friendRemainSec": max(0, int(self._next_friend_at - time.time())),
+                "farmRemainSec": max(0, math.ceil(self._next_farm_at - time.time())),
+                "friendRemainSec": max(0, math.ceil(self._next_friend_at - time.time())),
+            },
+            "lastFarm": {
+                "mode": str(last_farm.get("mode") or ""),
+                "plantedCount": max(0, _to_int(last_farm.get("plantedCount"), 0)),
+                "noActionReason": str(last_farm.get("noActionReason") or ""),
+                "plantSkipReason": str(last_farm.get("plantSkipReason") or ""),
             },
             "dailyRoutines": self._daily_routines_snapshot(),
         }
@@ -842,7 +856,7 @@ class AccountRuntime:
     async def _connect_and_login(self) -> None:
         code = str(self.account.get("code") or "").strip()
         if not code:
-            raise RuntimeError("账号 code 为空")
+            raise RuntimeError("账号缺少绑定 code，code 可能失效，请重新扫码绑定")
         if not self._session_disconnect_bound:
             await self.session.on_disconnect(self._on_session_disconnect)
             self._session_disconnect_bound = True
@@ -1209,7 +1223,7 @@ class AccountRuntime:
                 mode=mode,
                 reason=no_action_reason,
             )
-        return {
+        result = {
             "hadWork": bool(actions),
             "actions": actions,
             "mode": mode,
@@ -1233,6 +1247,13 @@ class AccountRuntime:
                 "noActionReason": no_action_reason,
             },
         }
+        self._last_farm_result = {
+            "mode": mode,
+            "plantedCount": planted_count,
+            "noActionReason": no_action_reason,
+            "plantSkipReason": plant_skip_reason,
+        }
+        return result
 
     async def _auto_plant(self, dead_ids: list[int], empty_ids: list[int]) -> int:
         self._last_plant_skip_reason = ""
@@ -1265,7 +1286,7 @@ class AccountRuntime:
             self._last_plant_skip_reason = "没有可种植的有效地块"
             return 0
         seed = await self.farm.choose_seed(
-            current_level=_to_int(self.user_state["level"]),
+            current_level=max(1, _to_int(self.user_state["level"])),
             strategy=str(self.settings.get("strategy") or "preferred"),
             preferred_seed_id=_to_int(self.settings.get("preferredSeedId"), 0),
         )
@@ -1623,8 +1644,20 @@ class AccountRuntime:
             notify.ParseFromString(payload)
             if notify.HasField("basic"):
                 basic = notify.basic
-                if _to_int(basic.level, -1) >= 0:
-                    self.user_state["level"] = _to_int(basic.level)
+                next_level = _to_int(basic.level, -1)
+                if next_level > 0:
+                    self.user_state["level"] = next_level
+                elif next_level <= 0:
+                    current_level = _to_int(self.user_state.get("level"), 0)
+                    if current_level > 0:
+                        self._debug_log(
+                            "farm",
+                            f"ignore invalid basic level update: recv={next_level}, keep={current_level}",
+                            module="farm",
+                            event="basic_level_ignored",
+                            recvLevel=next_level,
+                            keepLevel=current_level,
+                        )
                 if _to_int(basic.gold, -1) >= 0:
                     self.user_state["gold"] = _to_int(basic.gold)
                 if _to_int(basic.exp, -1) >= 0:

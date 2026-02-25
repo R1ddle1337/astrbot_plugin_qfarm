@@ -412,7 +412,8 @@ class QFarmCommandRouter:
             try:
                 await self.api.delete_account(account_id)
             except Exception as e:
-                self._log_warning(f"删除账号失败(忽略): {e}")
+                self._log_warning(f"删除账号失败: {e}")
+                return [RouterReply(text=f"解绑失败：删除账号失败，已保留本地绑定。错误: {e}")]
             self.state_store.unbind_account(user_id)
             return [RouterReply(text=f"解绑成功，账号 {account_id} 已删除并解除绑定。")]
 
@@ -1784,7 +1785,7 @@ class QFarmCommandRouter:
             f"经验: {status.get('exp', 0)}",
             f"点券: {status.get('coupon', 0)}",
             (
-                "会话收益: "
+                "会话净变化: "
                 f"经验 {data.get('sessionExpGained', 0)} / "
                 f"金币 {data.get('sessionGoldGained', 0)} / "
                 f"点券 {data.get('sessionCouponGained', 0)}"
@@ -1795,6 +1796,9 @@ class QFarmCommandRouter:
         ]
         if auto_snapshot:
             lines.append(f"自动化: {auto_snapshot}")
+        session_coupon_gained = self._safe_int(data.get("sessionCouponGained"), 0)
+        if session_coupon_gained < 0:
+            lines.append("说明: 负值通常来自 mall_organic_fertilizer 自动购买消耗。")
         farm_remain = self._safe_int(next_checks.get("farmRemainSec"), -1)
         friend_remain = self._safe_int(next_checks.get("friendRemainSec"), -1)
         if runtime_state != "running":
@@ -1802,9 +1806,12 @@ class QFarmCommandRouter:
         elif not connected:
             lines.append("调度说明: 连接未就绪/自动重连中，恢复连接后会继续自动巡查。")
         elif farm_remain == 0 or friend_remain == 0:
-            lines.append("调度说明: 巡查计时已到，下一轮自动化应在 1 秒内触发。")
+            lines.append("调度说明: 已到时，等待调度槽位（1s轮询）。")
         else:
             lines.append("调度说明: 倒计时结束后会自动执行对应巡查。")
+        last_farm_reason = self._extract_last_farm_reason(data.get("lastFarm"))
+        if last_farm_reason:
+            lines.append(f"最近农田说明: {last_farm_reason}")
         if last_error:
             lines.append(f"最近启动错误: {last_error}")
 
@@ -2006,6 +2013,19 @@ class QFarmCommandRouter:
             parts.append(f"fertilizer={fertilizer}")
         return " ".join(parts)
 
+    def _extract_last_farm_reason(self, last_farm: Any) -> str:
+        if not isinstance(last_farm, dict):
+            return ""
+        explain = last_farm.get("explain")
+        explain_data = explain if isinstance(explain, dict) else {}
+        plant_skip_reason = str(last_farm.get("plantSkipReason") or explain_data.get("plantSkipReason") or "").strip()
+        if plant_skip_reason:
+            return plant_skip_reason
+        no_action_reason = str(last_farm.get("noActionReason") or explain_data.get("noActionReason") or "").strip()
+        if no_action_reason:
+            return no_action_reason
+        return ""
+
     def _suggest_unknown_command(self, token: str) -> str:
         current = str(token or "").strip()
         if not current:
@@ -2060,6 +2080,7 @@ class QFarmCommandRouter:
             "session_disconnected": [
                 "建议: qfarm 状态",
                 "建议: qfarm 账号 重连",
+                "建议: code 可能失效，请重新扫码绑定",
             ],
             "qr_timeout": [
                 "建议: qfarm 账号 绑定扫码",
@@ -2069,6 +2090,7 @@ class QFarmCommandRouter:
                 "建议: qfarm 账号 绑定 code <code>",
                 "建议: qfarm 账号 绑定扫码",
                 "建议: qfarm 账号 启动",
+                "建议: code 可能失效，请重新扫码绑定",
             ],
             "timeout": [
                 "建议: 稍后重试一次",

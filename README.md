@@ -330,7 +330,14 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.4.4
+- Current release: v2.4.5
+- 2026-02-25 v2.4.5
+- Reason: close the user-reported stability cluster (`自动种植不执行/状态调度误导/点券负值误解/查询链路静默失败`) and harden local persistence consistency.
+- Change: fixed `BasicNotify` level overwrite (`level<=0` is now ignored), added level floor for auto-plant seed selection, switched status countdown to `ceil`, refined verbose scheduler message, added `lastFarm` diagnostics, changed session text to “会话净变化” with negative coupon explanation, hardened `account unbind` to keep local binding on remote delete failure, made friend/task query failures explicit, and added locks/atomic write improvements for `state_store` + runtime log persistence.
+- Impact: auto-plant can recover from false `Lv0` state, status output is easier to interpret, query failures become diagnosable instead of silently returning empty data, and concurrent persistence is more robust.
+- Risk: stricter error propagation may expose previously hidden backend/session exceptions in command replies; operators may need to rebind account when code is invalid or expired.
+- Verification: `PYTHONPATH=d:\\botproject python -m pytest tests -q` passed (`166 passed`).
+- Verification: `python scripts/check_release_ready.py` passed.
 - 2026-02-25 v2.4.4
 - Reason: resolve the v2.4.3 regression cluster reported by users (`扫码超时/登录后掉线/查询失效/自动化异常`) by completing the qr/runtime config path and tightening reconnect behavior.
 - Change: runtime manager now supports `qr_login` + `runtime` config passthrough and forwards mode/timeout/retry parameters to QR create/check (with legacy compatibility); QR bind flow now uses configurable timeout + auto re-poll rounds and refreshes QR on timeout; account runtime now handles session-disconnect callbacks and configurable friend-cycle error backoff; fixed `GatewaySession.stop()` deadlock when canceling recv loop; synced defaults for `qr_login.mode=auto`, `qr_login.auto_retry_times=1`, `runtime.heartbeat_fail_limit=2`, `automation.friend_error_backoff_sec=5.0`.
