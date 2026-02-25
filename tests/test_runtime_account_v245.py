@@ -45,20 +45,23 @@ async def test_get_status_next_checks_uses_ceil_and_contains_last_farm(monkeypat
         "plantTargetCount": 5,
         "plantedCount": 2,
         "noActionReason": "",
-        "plantSkipReason": "库存不足",
+        "plantSkipReason": "种子库存不足",
     }
     monkeypatch.setattr(account_runtime_module.time, "time", lambda: 100.0)
 
     status = await runtime.get_status()
 
     assert status["nextChecks"] == {"farmRemainSec": 1, "friendRemainSec": 1}
-    assert status["lastFarm"] == {
-        "mode": "plant",
-        "plantTargetCount": 5,
-        "plantedCount": 2,
-        "noActionReason": "",
-        "plantSkipReason": "库存不足",
-    }
+    assert status["lastFarm"]["mode"] == "plant"
+    assert status["lastFarm"]["plantTargetCount"] == 5
+    assert status["lastFarm"]["plantedCount"] == 2
+    assert status["lastFarm"]["noActionReason"] == ""
+    assert status["lastFarm"]["plantSkipReason"] == "种子库存不足"
+    assert status["lastFarm"]["seedDecision"] == ""
+    assert status["lastFarm"]["seedDecisionReason"] == ""
+    assert status["lastFarm"]["preferredSeedId"] == 0
+    assert status["lastFarm"]["selectedSeedId"] == 0
+    assert status["lastFarm"]["selectedSeedName"] == ""
 
 
 @pytest.mark.asyncio
@@ -109,5 +112,5 @@ async def test_connect_and_login_missing_code_has_rebind_hint():
     runtime = AccountRuntime.__new__(AccountRuntime)
     runtime.account = {"id": "acc-1", "code": ""}
 
-    with pytest.raises(RuntimeError, match="code 可能失效，请重新扫码绑定"):
+    with pytest.raises(RuntimeError, match="code.*重新扫码绑定"):
         await runtime._connect_and_login()

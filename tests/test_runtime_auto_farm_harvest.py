@@ -84,13 +84,16 @@ async def test_do_farm_operation_all_triggers_harvest_and_plant_flow():
     runtime._auto_sell.assert_awaited_once()
     assert runtime.operations.get("harvest") == 2
     assert result["hadWork"] is True
-    assert runtime._last_farm_result == {
-        "mode": "all",
-        "plantTargetCount": 4,
-        "plantedCount": 3,
-        "noActionReason": "",
-        "plantSkipReason": "",
-    }
+    assert runtime._last_farm_result["mode"] == "all"
+    assert runtime._last_farm_result["plantTargetCount"] == 4
+    assert runtime._last_farm_result["plantedCount"] == 3
+    assert runtime._last_farm_result["noActionReason"] == ""
+    assert runtime._last_farm_result["plantSkipReason"] == ""
+    assert runtime._last_farm_result["seedDecision"] == ""
+    assert runtime._last_farm_result["seedDecisionReason"] == ""
+    assert runtime._last_farm_result["preferredSeedId"] == 0
+    assert runtime._last_farm_result["selectedSeedId"] == 0
+    assert runtime._last_farm_result["selectedSeedName"] == ""
 
 
 @pytest.mark.asyncio

@@ -155,7 +155,16 @@ class AccountRuntime:
             "plantedCount": 0,
             "noActionReason": "",
             "plantSkipReason": "",
+            "seedDecision": "",
+            "seedDecisionReason": "",
+            "preferredSeedId": 0,
+            "selectedSeedId": 0,
+            "selectedSeedName": "",
         }
+        self._last_seed_decision = ""
+        self._last_seed_decision_reason = ""
+        self._last_selected_seed_id = 0
+        self._last_selected_seed_name = ""
         self._daily_routines = self._normalize_daily_routines(self.settings.get("dailyRoutines"))
         self.heartbeat_fail_limit = max(
             1,
@@ -275,6 +284,11 @@ class AccountRuntime:
                 "plantedCount": max(0, _to_int(last_farm.get("plantedCount"), 0)),
                 "noActionReason": str(last_farm.get("noActionReason") or ""),
                 "plantSkipReason": str(last_farm.get("plantSkipReason") or ""),
+                "seedDecision": str(last_farm.get("seedDecision") or ""),
+                "seedDecisionReason": str(last_farm.get("seedDecisionReason") or ""),
+                "preferredSeedId": max(0, _to_int(last_farm.get("preferredSeedId"), 0)),
+                "selectedSeedId": max(0, _to_int(last_farm.get("selectedSeedId"), 0)),
+                "selectedSeedName": str(last_farm.get("selectedSeedName") or ""),
             },
             "dailyRoutines": self._daily_routines_snapshot(),
         }
@@ -1077,6 +1091,11 @@ class AccountRuntime:
         plant_skip_reason = ""
         harvest_skip_reason = ""
         no_action_reason = ""
+        seed_decision = ""
+        seed_decision_reason = ""
+        selected_seed_id = 0
+        selected_seed_name = ""
+        preferred_seed_id = max(0, _to_int(self.settings.get("preferredSeedId"), 0))
         self._debug_log(
             "农场",
             (
@@ -1167,6 +1186,10 @@ class AccountRuntime:
             plant_target_count = len({_to_int(v, 0) for v in dead_ids + empty_ids if _to_int(v, 0) > 0})
             planted = await self._auto_plant(dead_ids, empty_ids)
             planted_count = max(0, _to_int(planted, 0))
+            seed_decision = str(getattr(self, "_last_seed_decision", "") or "")
+            seed_decision_reason = str(getattr(self, "_last_seed_decision_reason", "") or "")
+            selected_seed_id = max(0, _to_int(getattr(self, "_last_selected_seed_id", 0), 0))
+            selected_seed_name = str(getattr(self, "_last_selected_seed_name", "") or "")
             if planted > 0:
                 actions.append(f"种植{planted}")
             elif plant_target_count > 0:
@@ -1242,6 +1265,11 @@ class AccountRuntime:
             "plantTargetCount": plant_target_count,
             "plantedCount": planted_count,
             "plantSkipReason": plant_skip_reason,
+            "seedDecision": seed_decision,
+            "seedDecisionReason": seed_decision_reason,
+            "preferredSeedId": preferred_seed_id,
+            "selectedSeedId": selected_seed_id,
+            "selectedSeedName": selected_seed_name,
             "plantFailures": list(getattr(self.farm, "last_plant_failures", []) or [])[:10],
             "explain": {
                 "harvestSkipReason": harvest_skip_reason,
@@ -1255,11 +1283,20 @@ class AccountRuntime:
             "plantedCount": planted_count,
             "noActionReason": no_action_reason,
             "plantSkipReason": plant_skip_reason,
+            "seedDecision": seed_decision,
+            "seedDecisionReason": seed_decision_reason,
+            "preferredSeedId": preferred_seed_id,
+            "selectedSeedId": selected_seed_id,
+            "selectedSeedName": selected_seed_name,
         }
         return result
 
     async def _auto_plant(self, dead_ids: list[int], empty_ids: list[int]) -> int:
         self._last_plant_skip_reason = ""
+        self._last_seed_decision = ""
+        self._last_seed_decision_reason = ""
+        self._last_selected_seed_id = 0
+        self._last_selected_seed_name = ""
         lands_to_plant = list(empty_ids)
         if dead_ids:
             try:
@@ -1288,12 +1325,49 @@ class AccountRuntime:
         if not lands_to_plant:
             self._last_plant_skip_reason = "没有可种植的有效地块"
             return 0
+
         current_level = max(1, _to_int(self.user_state["level"]))
-        seed = await self.farm.choose_seed(
-            current_level=current_level,
-            strategy=str(self.settings.get("strategy") or "preferred"),
-            preferred_seed_id=_to_int(self.settings.get("preferredSeedId"), 0),
-        )
+        preferred_seed_id = max(0, _to_int(self.settings.get("preferredSeedId"), 0))
+        strategy = str(self.settings.get("strategy") or "preferred").strip().lower()
+        seed: dict[str, Any] | None = None
+
+        if preferred_seed_id > 0:
+            if strategy != "preferred":
+                self._debug_log(
+                    "farm",
+                    f"force preferred seed selection this round: preferred={preferred_seed_id}, strategy={strategy}",
+                    module="farm",
+                    event="seed_preferred_forced",
+                    preferredSeedId=preferred_seed_id,
+                    strategy=strategy,
+                )
+            seed = await self._pick_seed_from_bag(
+                current_level=current_level,
+                preferred_seed_id=preferred_seed_id,
+                preferred_only=True,
+            )
+            if seed:
+                self._last_seed_decision = "preferred_bag"
+                self._last_seed_decision_reason = f"偏好种子 {preferred_seed_id} 已从背包命中。"
+            else:
+                seed = await self._pick_preferred_seed_from_shop(
+                    current_level=current_level,
+                    preferred_seed_id=preferred_seed_id,
+                )
+                if seed:
+                    self._last_seed_decision = "preferred_shop"
+                    self._last_seed_decision_reason = f"偏好种子 {preferred_seed_id} 已从商店可购买列表命中。"
+
+        if not seed:
+            seed = await self.farm.choose_seed(
+                current_level=current_level,
+                strategy=strategy or "preferred",
+                preferred_seed_id=preferred_seed_id,
+            )
+            if seed:
+                self._last_seed_decision = "strategy"
+                self._last_seed_decision_reason = f"按策略 {strategy or 'preferred'} 选择种子。"
+
         if not seed:
             self._debug_log(
                 "farm",
@@ -1302,7 +1376,15 @@ class AccountRuntime:
                 event="seed_pick_failed",
                 targetCount=len(lands_to_plant),
             )
-            seed = await self._pick_seed_from_bag(current_level=current_level)
+            seed = await self._pick_seed_from_bag(
+                current_level=current_level,
+                preferred_seed_id=preferred_seed_id,
+                preferred_only=False,
+            )
+            if seed:
+                self._last_seed_decision = "strategy_fallback_bag"
+                self._last_seed_decision_reason = "商店候选不可用，已回退背包库存种子。"
+
         if not seed:
             self._last_plant_skip_reason = "没有可用种子（请先执行 qfarm 种子 列表 / qfarm 设置 种子 <seedId>）"
             self._debug_log(
@@ -1313,7 +1395,31 @@ class AccountRuntime:
                 targetCount=len(lands_to_plant),
             )
             return 0
+
         seed_id = _to_int(seed.get("seedId"), 0)
+        config_data = getattr(self, "config_data", None)
+        fallback_seed_name = ""
+        if config_data is not None and hasattr(config_data, "get_plant_name_by_seed"):
+            try:
+                fallback_seed_name = str(config_data.get_plant_name_by_seed(seed_id) or "")
+            except Exception:
+                fallback_seed_name = ""
+        seed_name = str(seed.get("name") or fallback_seed_name or f"seed-{seed_id}")
+        self._last_selected_seed_id = seed_id
+        self._last_selected_seed_name = seed_name
+        if preferred_seed_id > 0 and seed_id > 0 and seed_id != preferred_seed_id:
+            self._last_seed_decision_reason = (
+                f"偏好种子 {preferred_seed_id} 当前不可用，已回退为 {seed_name}({seed_id})。"
+            )
+            self._debug_log(
+                "farm",
+                "preferred seed unavailable, fallback to another seed",
+                module="farm",
+                event="seed_preferred_fallback",
+                preferredSeedId=preferred_seed_id,
+                selectedSeedId=seed_id,
+            )
+
         goods_id = _to_int(seed.get("goodsId"), 0)
         price = _to_int(seed.get("price"), 0)
         target_count = len(lands_to_plant)
@@ -1441,7 +1547,38 @@ class AccountRuntime:
                 self._record("fertilize", await self.farm.fertilize(planted_ids, 1012))
         return planted
 
-    async def _pick_seed_from_bag(self, *, current_level: int) -> dict[str, Any] | None:
+    async def _pick_preferred_seed_from_shop(self, *, current_level: int, preferred_seed_id: int) -> dict[str, Any] | None:
+        target_seed_id = max(0, _to_int(preferred_seed_id, 0))
+        if target_seed_id <= 0:
+            return None
+        try:
+            seeds = await self.farm.get_available_seeds(current_level=max(1, _to_int(current_level, 1)))
+        except Exception as e:
+            self._debug_log(
+                "farm",
+                f"preferred seed lookup failed: {e}",
+                module="farm",
+                event="seed_preferred_lookup_failed",
+                preferredSeedId=target_seed_id,
+            )
+            return None
+        for row in list(seeds or []):
+            if not isinstance(row, dict):
+                continue
+            if _to_int(row.get("seedId"), 0) != target_seed_id:
+                continue
+            if bool(row.get("locked")) or bool(row.get("soldOut")):
+                return None
+            return dict(row)
+        return None
+
+    async def _pick_seed_from_bag(
+        self,
+        *,
+        current_level: int,
+        preferred_seed_id: int = 0,
+        preferred_only: bool = False,
+    ) -> dict[str, Any] | None:
         try:
             seeds = await self.farm.get_available_seeds(current_level=max(1, _to_int(current_level, 1)))
         except Exception as e:
@@ -1474,7 +1611,7 @@ class AccountRuntime:
             if seed_id <= 0:
                 continue
             stock_by_seed[seed_id] = _to_int(stock_by_seed.get(seed_id), 0) + max(0, _to_int(getattr(item, "count", 0), 0))
-        preferred_seed_id = max(0, _to_int(self.settings.get("preferredSeedId"), 0))
+        preferred_seed_id = max(0, _to_int(preferred_seed_id, 0))
         candidates: list[tuple[int, int, int, dict[str, Any]]] = []
         for row in list(seeds or []):
             if not isinstance(row, dict):
@@ -1483,6 +1620,8 @@ class AccountRuntime:
             if seed_id <= 0:
                 continue
             if bool(row.get("locked")):
+                continue
+            if preferred_only and seed_id != preferred_seed_id:
                 continue
             stock = max(0, _to_int(stock_by_seed.get(seed_id), 0))
             if stock <= 0:
@@ -1494,13 +1633,15 @@ class AccountRuntime:
         candidates.sort(key=lambda item: (item[0], item[1], item[2]))
         selected = dict(candidates[0][3])
         selected["_bagStock"] = max(0, _to_int(stock_by_seed.get(_to_int(selected.get("seedId"), 0)), 0))
+        event = "seed_pick_from_bag_preferred" if preferred_only else "seed_pick_from_bag"
         self._debug_log(
             "farm",
             "seed picked from bag fallback",
             module="farm",
-            event="seed_pick_from_bag",
+            event=event,
             seedId=_to_int(selected.get("seedId"), 0),
             stock=_to_int(selected.get("_bagStock"), 0),
+            preferredOnly=bool(preferred_only),
         )
         return selected
 
@@ -1571,6 +1712,82 @@ class AccountRuntime:
             if field == 2:
                 parsed = value
         return max(0, int(parsed))
+
+    @staticmethod
+    def _read_varint(data: bytes, offset: int) -> tuple[int, int]:
+        value = 0
+        shift = 0
+        idx = max(0, _to_int(offset, 0))
+        length = len(data)
+        while idx < length:
+            byte = data[idx]
+            idx += 1
+            value |= (byte & 0x7F) << shift
+            if (byte & 0x80) == 0:
+                return value, idx
+            shift += 7
+            if shift > 63:
+                raise ValueError("varint is too long")
+        raise ValueError("unexpected EOF while reading varint")
+
+    @classmethod
+    def _skip_wire_value(cls, data: bytes, offset: int, wire_type: int) -> int:
+        idx = max(0, _to_int(offset, 0))
+        length = len(data)
+        if wire_type == 0:  # varint
+            _, idx = cls._read_varint(data, idx)
+            return idx
+        if wire_type == 1:  # 64-bit
+            idx += 8
+            if idx > length:
+                raise ValueError("unexpected EOF while skipping fixed64")
+            return idx
+        if wire_type == 2:  # length-delimited
+            value_len, idx = cls._read_varint(data, idx)
+            idx += value_len
+            if idx > length:
+                raise ValueError("unexpected EOF while skipping bytes")
+            return idx
+        if wire_type == 5:  # 32-bit
+            idx += 4
+            if idx > length:
+                raise ValueError("unexpected EOF while skipping fixed32")
+            return idx
+        raise ValueError(f"unsupported wire type: {wire_type}")
+
+    @classmethod
+    def _extract_basic_notify_present_fields(cls, payload: bytes) -> set[int]:
+        if not isinstance(payload, (bytes, bytearray)):
+            return set()
+        data = bytes(payload)
+        idx = 0
+        basic_payload = b""
+        while idx < len(data):
+            key, idx = cls._read_varint(data, idx)
+            field_no = key >> 3
+            wire_type = key & 0x07
+            if field_no == 1 and wire_type == 2:
+                value_len, idx = cls._read_varint(data, idx)
+                end = idx + value_len
+                if end > len(data):
+                    raise ValueError("truncated basic payload")
+                basic_payload = data[idx:end]
+                idx = end
+                continue
+            idx = cls._skip_wire_value(data, idx, wire_type)
+        if not basic_payload:
+            return set()
+
+        present_fields: set[int] = set()
+        inner_idx = 0
+        while inner_idx < len(basic_payload):
+            key, inner_idx = cls._read_varint(basic_payload, inner_idx)
+            field_no = key >> 3
+            wire_type = key & 0x07
+            if field_no > 0:
+                present_fields.add(field_no)
+            inner_idx = cls._skip_wire_value(basic_payload, inner_idx, wire_type)
+        return present_fields
 
     def _today_key(self) -> str:
         now = time.localtime()
@@ -1721,6 +1938,16 @@ class AccountRuntime:
             notify.ParseFromString(payload)
             if notify.HasField("basic"):
                 basic = notify.basic
+                present_fields: set[int] | None = None
+                try:
+                    present_fields = self._extract_basic_notify_present_fields(payload)
+                except Exception as e:
+                    self._debug_log(
+                        "farm",
+                        f"basic notify presence parse failed: {e}",
+                        module="farm",
+                        event="basic_presence_parse_failed",
+                    )
                 next_level = _to_int(basic.level, -1)
                 if next_level > 0:
                     self.user_state["level"] = next_level
@@ -1735,9 +1962,9 @@ class AccountRuntime:
                             recvLevel=next_level,
                             keepLevel=current_level,
                         )
-                if _to_int(basic.gold, -1) >= 0:
+                if present_fields is not None and 5 in present_fields and _to_int(basic.gold, -1) >= 0:
                     self.user_state["gold"] = _to_int(basic.gold)
-                if _to_int(basic.exp, -1) >= 0:
+                if present_fields is not None and 4 in present_fields and _to_int(basic.exp, -1) >= 0:
                     self.user_state["exp"] = _to_int(basic.exp)
             return
         if "TaskInfoNotify" in message_type and self._automation().get("task", True):

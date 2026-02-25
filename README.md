@@ -1,4 +1,4 @@
-# astrbot_plugin_qfarm
+﻿# astrbot_plugin_qfarm
 
 AstrBot + NapCat 的 QQ 农场全量命令插件（纯 Python 协议实现）。
 
@@ -334,7 +334,13 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.4.7
+- Current release: v2.4.8
+- 2026-02-25 v2.4.8
+- Reason: fix the highest-impact regressions reported by users: preferred-seed setting not taking effect, kickout causing repeated rebind loops, and gold/exp being overwritten to zero by partial notify payloads.
+- Change: enforce preferred-seed-first selection in runtime (`bag -> preferred shop -> strategy -> bag fallback`) with explicit seed decision diagnostics; stop deleting accounts on kickout and keep binding while marking runtime as failed; harden `BasicNotify` field-presence parsing so `gold/exp` update only when fields are truly present; preserve local binding when backend account lookup is temporarily unavailable; enrich status/farm result output with `selectedSeed` and decision reason.
+- Impact: preferred-seed setting now reliably drives planting when stock exists, kickout no longer forces immediate re-scan, and status resource values avoid false zero/negative drift caused by notify default-field overwrite.
+- Risk: low-to-medium; runtime behavior is safer by default but may surface previously hidden session/account inconsistencies as explicit failed state that now requires manual rebind.
+- Verification: `PYTHONPATH=d:\botproject python -m pytest tests/test_runtime_basic_notify_presence.py tests/test_runtime_auto_plant_preferred_priority.py tests/test_runtime_manager_kickout_policy.py tests/test_command_router_binding_persistence.py tests/test_command_router_farm_operation.py tests/test_command_router_status_simplified.py tests/test_runtime_account_v245.py tests/test_runtime_auto_farm_harvest.py -q` passed (`30 passed`); full `PYTHONPATH=d:\botproject python -m pytest tests -q` passed (`185 passed`); `python scripts/check_release_ready.py` passed.
 - 2026-02-25 v2.4.7
 - Reason: improve command discoverability by adding explicit seed lookup guidance in help outputs.
 - Change: `qfarm 帮助`模块索引新增“种子”入口；`qfarm 帮助 详细`模块列表补充“种子”；新增 `qfarm 帮助 种子` 模块文案；`qfarm 帮助 设置`补充“查看可用种子: qfarm 种子 列表”。

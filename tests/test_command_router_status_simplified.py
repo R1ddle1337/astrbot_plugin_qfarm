@@ -176,3 +176,26 @@ async def test_status_verbose_shows_last_farm_plant_diagnostics(tmp_path: Path):
     assert replies
     text = replies[0].text
     assert "最近种植诊断: target=6 planted=4" in text
+
+
+@pytest.mark.asyncio
+async def test_status_verbose_shows_seed_decision_diagnostics(tmp_path: Path):
+    status_payload = _default_status_payload()
+    status_payload["lastFarm"] = {
+        "plantTargetCount": 3,
+        "plantedCount": 2,
+        "seedDecision": "strategy_fallback_bag",
+        "seedDecisionReason": "偏好种子暂不可用，已回退",
+        "preferredSeedId": 20002,
+        "selectedSeedId": 20010,
+        "selectedSeedName": "生姜",
+    }
+    router = _build_router(tmp_path, status_payload=status_payload)
+
+    replies = await router._cmd_status("u1", ["详细"])
+
+    assert replies
+    text = replies[0].text
+    assert "本轮选种决策: strategy_fallback_bag / 偏好种子暂不可用，已回退" in text
+    assert "偏好种子: 20002" in text
+    assert "本轮实际种子: 生姜(20010)" in text

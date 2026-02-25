@@ -361,8 +361,7 @@ class QFarmCommandRouter:
                 return [RouterReply(text="你还没有绑定账号。使用: qfarm 账号 绑定 code <code> [备注名]")]
             account = await self._fetch_account_by_id(info["account_id"])
             if not account:
-                self.state_store.unbind_account(user_id)
-                return [RouterReply(text="检测到绑定账号已不存在，已自动解绑，请重新绑定。")]
+                return [RouterReply(text="检测到绑定账号在后端暂不可见，已保留本地绑定。请检查运行时状态或手动重绑。")]
 
             status_data = await self.api.get_status(info["account_id"])
             runtime_state = status_data.get("runtimeState", "stopped")
@@ -944,7 +943,11 @@ class QFarmCommandRouter:
             if bool(target_seed.get("soldOut")):
                 return [RouterReply(text=f"seedId={seed_id} 当前已售罄，无法设置为偏好种子。")]
             await self.api.save_settings(account_id, {"seedId": seed_id})
-            lines = [f"偏好种子已更新: {seed_id}", "已立即触发一次种植校验。"]
+            lines = [
+                f"偏好种子已更新: {seed_id}",
+                "已启用偏好种子优先（有库存优先播种该 seedId）。",
+                "已立即触发一次种植校验。",
+            ]
             try:
                 result = await self.api.do_farm_operation(account_id, "plant")
                 lines.append(self._format_farm_op_result("plant", result))
@@ -1335,6 +1338,18 @@ class QFarmCommandRouter:
             planted = self._safe_int(data.get("plantedCount"), 0)
             if target > 0:
                 lines.append(f"播种结果: {planted}/{target}")
+            selected_seed_id = self._safe_int(data.get("selectedSeedId"), 0)
+            selected_seed_name = str(data.get("selectedSeedName") or "").strip()
+            if selected_seed_id > 0:
+                selected_label = f"{selected_seed_name}({selected_seed_id})" if selected_seed_name else str(selected_seed_id)
+                lines.append(f"本轮选种: {selected_label}")
+            seed_decision = str(data.get("seedDecision") or "").strip()
+            seed_decision_reason = str(data.get("seedDecisionReason") or "").strip()
+            if seed_decision or seed_decision_reason:
+                decision_line = f"选种决策: {seed_decision or '-'}"
+                if seed_decision_reason:
+                    decision_line += f" / {seed_decision_reason}"
+                lines.append(decision_line)
             reason = str(data.get("plantSkipReason") or "").strip()
             if reason and planted <= 0:
                 lines.append(f"未种植原因: {reason}")
@@ -1567,8 +1582,7 @@ class QFarmCommandRouter:
             raise QFarmApiError("当前用户未绑定账号，请先执行 `qfarm 账号 绑定 code <code>`。")
         account = await self._fetch_account_by_id(account_id)
         if not account:
-            self.state_store.unbind_account(user_id)
-            raise QFarmApiError("绑定账号不存在或已被删除，已自动解绑，请重新绑定。")
+            raise QFarmApiError("绑定账号在后端暂不可见（已保留本地绑定），请检查运行时状态或重新扫码绑定。")
         return account_id, account
 
     async def _fetch_account_by_id(self, account_id: str | int) -> dict[str, Any] | None:
@@ -1864,6 +1878,25 @@ class QFarmCommandRouter:
             planted_count = self._safe_int(last_farm.get("plantedCount"), 0)
             if target_count > 0 or planted_count > 0 or last_farm_reason:
                 lines.append(f"最近种植诊断: target={max(0, target_count)} planted={max(0, planted_count)}")
+            decision = str(last_farm.get("seedDecision") or "").strip()
+            decision_reason = str(last_farm.get("seedDecisionReason") or "").strip()
+            preferred_seed_id = self._safe_int(last_farm.get("preferredSeedId"), 0)
+            selected_seed_id = self._safe_int(last_farm.get("selectedSeedId"), 0)
+            selected_seed_name = str(last_farm.get("selectedSeedName") or "").strip()
+            if decision or decision_reason:
+                decision_line = f"本轮选种决策: {decision or '-'}"
+                if decision_reason:
+                    decision_line += f" / {decision_reason}"
+                lines.append(decision_line)
+            if preferred_seed_id > 0:
+                lines.append(f"偏好种子: {preferred_seed_id}")
+            if selected_seed_id > 0:
+                selected_label = (
+                    f"{selected_seed_name}({selected_seed_id})"
+                    if selected_seed_name
+                    else str(selected_seed_id)
+                )
+                lines.append(f"本轮实际种子: {selected_label}")
         if last_error:
             lines.append(f"最近启动错误: {last_error}")
 

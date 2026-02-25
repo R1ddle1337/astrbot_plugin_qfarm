@@ -94,7 +94,7 @@ CORE_PUSH_TASK_ERROR_EVENTS = {
     "vip_daily_gift",
     "daily_share",
 }
-CORE_PUSH_SYSTEM_EVENTS = {"account_start_failed", "start_failed", "kickout_delete"}
+CORE_PUSH_SYSTEM_EVENTS = {"account_start_failed", "start_failed", "kickout_hold"}
 
 
 class PushDeliverError(RuntimeError):
@@ -1580,24 +1580,35 @@ class QFarmRuntimeManager:
             return
 
     async def _on_runtime_kicked(self, account_id: str, reason: str) -> None:
-        self._add_account_log("kickout_delete", f"账号被踢下线，已删除: {reason}", account_id, "", reason=reason)
+        account_id_text = str(account_id or "").strip()
+        reason_text = str(reason or "").strip() or "未知原因"
+        self._add_account_log("kickout_hold", f"账号被踢下线，已保留绑定: {reason_text}", account_id_text, "", reason=reason_text)
         self._on_runtime_log(
-            str(account_id or ""),
+            account_id_text,
             "system",
-            f"account kicked and removed: {reason}",
+            f"account kicked and hold: {reason_text}",
             True,
             {
                 "module": "system",
-                "event": "kickout_delete",
+                "event": "kickout_hold",
                 "result": "error",
-                "reason": str(reason or ""),
-                "accountId": str(account_id or ""),
+                "reason": reason_text,
+                "accountId": account_id_text,
             },
         )
-        try:
-            await self.delete_account(account_id)
-        except Exception:
-            return
+        runtime = self._runtimes.get(account_id_text)
+        if runtime:
+            try:
+                await runtime.stop()
+            except Exception:
+                pass
+            finally:
+                self._runtimes.pop(account_id_text, None)
+        await self._set_runtime_status(
+            account_id_text,
+            runtimeState="failed",
+            lastStartError=f"账号被踢下线，请重新扫码绑定: {reason_text}",
+        )
 
     def _add_account_log(self, action: str, msg: str, account_id: str = "", account_name: str = "", **extra: Any) -> None:
         row = {

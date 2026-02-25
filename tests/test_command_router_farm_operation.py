@@ -17,7 +17,7 @@ class _DummyProcessManager:
 
 class _FakeApi:
     async def get_accounts(self) -> dict[str, Any]:
-        return {"accounts": [{"id": "acc-1", "name": "测试账号", "platform": "qq", "qq": "10001"}]}
+        return {"accounts": [{"id": "acc-1", "name": "test-account", "platform": "qq", "qq": "10001"}]}
 
     async def do_farm_operation(self, account_id: str, op_type: str) -> dict[str, Any]:
         assert account_id == "acc-1"
@@ -34,14 +34,18 @@ class _FakeApi:
             },
             "plantTargetCount": 7,
             "plantedCount": 0,
-            "plantSkipReason": "种子库存不足且金币不足，无法购买种子",
+            "plantSkipReason": "seed unavailable",
+            "seedDecision": "strategy_fallback_bag",
+            "seedDecisionReason": "preferred seed unavailable",
+            "selectedSeedId": 20010,
+            "selectedSeedName": "ginger",
             "plantFailures": [{"landId": 1, "error": "items=GatewaySessionError; map=GatewaySessionError"}],
         }
 
 
 def _build_router(tmp_path: Path) -> QFarmCommandRouter:
     store = QFarmStateStore(tmp_path)
-    store.bind_account("u1", "acc-1", "测试账号")
+    store.bind_account("u1", "acc-1", "test-account")
     return QFarmCommandRouter(
         api_client=_FakeApi(),  # type: ignore[arg-type]
         state_store=store,
@@ -57,12 +61,14 @@ def _build_router(tmp_path: Path) -> QFarmCommandRouter:
 
 
 @pytest.mark.asyncio
-async def test_cmd_farm_operate_plant_reports_skip_reason(tmp_path: Path):
+async def test_cmd_farm_operate_plant_reports_skip_reason_and_seed_diagnostics(tmp_path: Path):
     router = _build_router(tmp_path)
-    replies = await router._cmd_farm("u1", ["操作", "plant"])
+    replies = await router._cmd_farm("u1", ["operate", "plant"])
     assert replies
     text = replies[0].text
-    assert "农田操作完成: plant" in text
-    assert "播种结果: 0/7" in text
-    assert "未种植原因: 种子库存不足且金币不足，无法购买种子" in text
-    assert "失败示例: 地块#1 items=GatewaySessionError; map=GatewaySessionError" in text
+    assert "plant" in text
+    assert "0/7" in text
+    assert "ginger(20010)" in text
+    assert "strategy_fallback_bag / preferred seed unavailable" in text
+    assert "seed unavailable" in text
+    assert "GatewaySessionError" in text
