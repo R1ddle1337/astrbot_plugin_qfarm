@@ -1387,6 +1387,9 @@ class AccountRuntime:
 
         if not seed:
             self._last_plant_skip_reason = "没有可用种子（请先执行 qfarm 种子 列表 / qfarm 设置 种子 <seedId>）"
+            preferred_meta_reason = str(getattr(self, "_last_seed_decision_reason", "") or "").strip()
+            if preferred_meta_reason and "元数据不可用" in preferred_meta_reason:
+                self._last_plant_skip_reason = preferred_meta_reason
             self._debug_log(
                 "farm",
                 "skip auto plant: no available seed",
@@ -1422,22 +1425,42 @@ class AccountRuntime:
 
         goods_id = _to_int(seed.get("goodsId"), 0)
         price = _to_int(seed.get("price"), 0)
+        unknown_meta = bool(seed.get("unknownMeta"))
+        seed_purchase_ready = self._is_seed_purchase_ready(seed)
         target_count = len(lands_to_plant)
         seed_stock_override = _to_int(seed.get("_bagStock"), -1)
         seed_stock = seed_stock_override if seed_stock_override >= 0 else await self._get_seed_stock(seed_id)
         buy_count = target_count
+        affordable = 0
+        gold_now = max(0, _to_int(self.user_state.get("gold"), 0))
         if seed_stock is not None:
             buy_count = 0
             if seed_stock < target_count:
                 missing = target_count - seed_stock
-                if goods_id > 0 and price > 0:
-                    affordable = max(0, _to_int(self.user_state.get("gold"), 0) // max(1, price))
+                if seed_purchase_ready:
+                    affordable = max(0, gold_now // max(1, price))
                     buy_count = min(missing, affordable)
                     can_plant = seed_stock + buy_count
                 else:
                     can_plant = seed_stock
                 if can_plant <= 0:
-                    self._last_plant_skip_reason = "种子库存不足且金币不足，无法购买种子"
+                    if seed_purchase_ready and affordable <= 0:
+                        self._last_plant_skip_reason = "种子库存不足且金币不足，无法购买种子"
+                    else:
+                        self._last_plant_skip_reason = "种子库存不足且商店元数据不可用，无法自动购买（稍后重试）"
+                        self._debug_log(
+                            "farm",
+                            "seed shop metadata unavailable, skip auto buy",
+                            module="farm",
+                            event="seed_shop_meta_unavailable",
+                            seedId=seed_id,
+                            goodsId=goods_id,
+                            price=price,
+                            unknownMeta=bool(unknown_meta),
+                            accountGold=gold_now,
+                        )
+                        if not str(getattr(self, "_last_seed_decision_reason", "") or "").strip():
+                            self._last_seed_decision_reason = self._last_plant_skip_reason
                     self._debug_log(
                         "farm",
                         "skip auto plant: no seed stock and cannot buy",
@@ -1448,6 +1471,9 @@ class AccountRuntime:
                         stock=seed_stock,
                         goodsId=goods_id,
                         price=price,
+                        accountGold=gold_now,
+                        affordable=affordable,
+                        unknownMeta=bool(unknown_meta),
                     )
                     return 0
                 if can_plant < target_count:
@@ -1464,11 +1490,15 @@ class AccountRuntime:
                 targetCount=target_count,
                 goodsId=goods_id,
                 price=price,
+                accountGold=gold_now,
+                affordable=affordable,
+                unknownMeta=bool(unknown_meta),
+                metaReady=bool(seed_purchase_ready),
             )
 
         bought_seed_count = 0
         optimistic_stock_after_buy: int | None = None
-        if goods_id > 0 and price > 0 and buy_count > 0:
+        if seed_purchase_ready and buy_count > 0:
             try:
                 buy_reply = await self.farm.buy_goods(goods_id, buy_count, price)
                 if buy_count > 0:
@@ -1547,12 +1577,74 @@ class AccountRuntime:
                 self._record("fertilize", await self.farm.fertilize(planted_ids, 1012))
         return planted
 
+    @staticmethod
+    def _is_seed_purchase_ready(seed: dict[str, Any] | None) -> bool:
+        if not isinstance(seed, dict):
+            return False
+        if bool(seed.get("unknownMeta")):
+            return False
+        if _to_int(seed.get("goodsId"), 0) <= 0:
+            return False
+        if _to_int(seed.get("price"), 0) <= 0:
+            return False
+        return True
+
+    async def _load_seed_catalog_with_retry(
+        self,
+        *,
+        current_level: int,
+        retry: int = 2,
+        backoff: list[float] | None = None,
+    ) -> list[dict[str, Any]]:
+        safe_level = max(1, _to_int(current_level, 1))
+        max_retry = max(0, _to_int(retry, 2))
+        delays = list(backoff or [0.25, 0.5])
+        last_rows: list[dict[str, Any]] = []
+        for attempt in range(max_retry + 1):
+            try:
+                rows = await self.farm.get_available_seeds(current_level=safe_level)
+            except Exception as e:
+                rows = []
+                self._debug_log(
+                    "farm",
+                    f"seed catalog load failed: {e}",
+                    module="farm",
+                    event="seed_shop_retry",
+                    attempt=attempt + 1,
+                    result="error",
+                    error=str(e),
+                )
+            normalized = [dict(row) for row in list(rows or []) if isinstance(row, dict)]
+            last_rows = normalized
+            has_purchase_meta = any(self._is_seed_purchase_ready(row) for row in normalized)
+            if has_purchase_meta or attempt >= max_retry:
+                return normalized
+            delay = 0.25
+            if delays:
+                delay = float(delays[min(attempt, len(delays) - 1)])
+            self._debug_log(
+                "farm",
+                "seed catalog metadata unavailable, retrying",
+                module="farm",
+                event="seed_shop_retry",
+                attempt=attempt + 1,
+                delaySec=delay,
+                candidateCount=len(normalized),
+                result="retry",
+            )
+            await asyncio.sleep(max(0.0, delay))
+        return last_rows
+
     async def _pick_preferred_seed_from_shop(self, *, current_level: int, preferred_seed_id: int) -> dict[str, Any] | None:
         target_seed_id = max(0, _to_int(preferred_seed_id, 0))
         if target_seed_id <= 0:
             return None
         try:
-            seeds = await self.farm.get_available_seeds(current_level=max(1, _to_int(current_level, 1)))
+            seeds = await self._load_seed_catalog_with_retry(
+                current_level=max(1, _to_int(current_level, 1)),
+                retry=2,
+                backoff=[0.25, 0.5],
+            )
         except Exception as e:
             self._debug_log(
                 "farm",
@@ -1568,6 +1660,22 @@ class AccountRuntime:
             if _to_int(row.get("seedId"), 0) != target_seed_id:
                 continue
             if bool(row.get("locked")) or bool(row.get("soldOut")):
+                return None
+            if not self._is_seed_purchase_ready(row):
+                self._last_seed_decision_reason = (
+                    f"偏好种子 {target_seed_id} 商店元数据不可用，无法自动购买（稍后重试）。"
+                )
+                self._debug_log(
+                    "farm",
+                    "preferred seed metadata unavailable",
+                    module="farm",
+                    event="seed_shop_meta_unavailable",
+                    preferredSeedId=target_seed_id,
+                    seedId=_to_int(row.get("seedId"), 0),
+                    goodsId=_to_int(row.get("goodsId"), 0),
+                    price=_to_int(row.get("price"), 0),
+                    unknownMeta=bool(row.get("unknownMeta")),
+                )
                 return None
             return dict(row)
         return None

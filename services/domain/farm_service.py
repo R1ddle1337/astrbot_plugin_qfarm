@@ -479,7 +479,7 @@ class FarmService:
         preferred_seed_id: int,
     ) -> dict[str, Any] | None:
         seeds = await self.get_available_seeds(current_level)
-        available = [s for s in seeds if not s["locked"] and not s["soldOut"]]
+        available = [s for s in seeds if not s["locked"] and not s["soldOut"] and not bool(s.get("unknownMeta"))]
         if not available:
             return None
 

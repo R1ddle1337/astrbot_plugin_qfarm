@@ -526,6 +526,8 @@ class QFarmCommandRouter:
                 marks.append("未解锁")
             if seed.get("soldOut"):
                 marks.append("售罄")
+            if seed.get("unknownMeta"):
+                marks.append("商店元数据缺失")
             mark_text = f" [{'|'.join(marks)}]" if marks else ""
             lines.append(f"- {seed_id}: {name} Lv{level} 价格{price}{mark_text}")
         if len(seeds) > 60:

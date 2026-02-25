@@ -102,3 +102,18 @@ async def test_settings_seed_valid_triggers_immediate_plant_check(tmp_path: Path
     assert "已立即触发一次种植校验。" in text
     api.save_settings.assert_awaited_once_with("acc-1", {"seedId": 20002})
     api.do_farm_operation.assert_awaited_once_with("acc-1", "plant")
+
+
+@pytest.mark.asyncio
+async def test_seeds_list_marks_unknown_meta_row(tmp_path: Path):
+    api = _SeedApi(
+        [
+            {"seedId": 20002, "name": "测试种子", "locked": False, "soldOut": False, "unknownMeta": True, "price": 2, "requiredLevel": 1},
+        ]
+    )
+    router = _build_router(tmp_path, api)
+
+    replies = await router._cmd_seeds("u1", ["列表"])
+
+    assert replies
+    assert "商店元数据缺失" in replies[0].text

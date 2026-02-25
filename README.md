@@ -334,7 +334,13 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.4.8
+- Current release: v2.5.0
+- 2026-02-25 v2.5.0
+- Reason: fix the false “insufficient gold” diagnosis during auto seed purchase when shop metadata degrades to fallback rows (`unknownMeta=true`, `goodsId=0`), which blocked planting despite enough gold.
+- Change: `choose_seed` now excludes `unknownMeta` rows; runtime adds seed catalog retry (`_load_seed_catalog_with_retry`) and strict purchase-readiness checks (`unknownMeta=false && goodsId>0 && price>0`); auto-plant differentiates “metadata unavailable” vs “insufficient gold”; preferred-seed shop lookup refuses unknown-meta rows; `qfarm 种子 列表` marks fallback rows with `商店元数据缺失`.
+- Impact: users no longer get misled by false gold-insufficient errors under transient mall metadata failures, and auto-plant can recover automatically once real shop metadata returns.
+- Risk: when metadata remains unavailable for multiple retries, auto-buy is skipped by design and users must wait for the next retry cycle or use bag stock.
+- Verification: `PYTHONPATH=d:\botproject python -m pytest tests/test_runtime_auto_plant_preferred_priority.py tests/test_command_router_settings_seed_strict.py tests/test_farm_service_choose_seed_meta_filter.py -q` passed (`13 passed`); full `PYTHONPATH=d:\botproject python -m pytest tests -q` passed (`192 passed`); `python scripts/check_release_ready.py` passed.
 - 2026-02-25 v2.4.8
 - Reason: fix the highest-impact regressions reported by users: preferred-seed setting not taking effect, kickout causing repeated rebind loops, and gold/exp being overwritten to zero by partial notify payloads.
 - Change: enforce preferred-seed-first selection in runtime (`bag -> preferred shop -> strategy -> bag fallback`) with explicit seed decision diagnostics; stop deleting accounts on kickout and keep binding while marking runtime as failed; harden `BasicNotify` field-presence parsing so `gold/exp` update only when fields are truly present; preserve local binding when backend account lookup is temporarily unavailable; enrich status/farm result output with `selectedSeed` and decision reason.
