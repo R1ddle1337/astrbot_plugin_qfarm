@@ -41,6 +41,7 @@ def test_help_brief_returns_module_index(tmp_path: Path):
 
     assert "模块索引" in text
     assert "qfarm 帮助 服务" in text
+    assert "qfarm 帮助 种子" in text
     assert "qfarm 帮助 详细" in text
 
 
@@ -52,6 +53,7 @@ async def test_help_verbose_from_dispatch(tmp_path: Path):
 
     assert replies
     assert "命令总览（详细）" in replies[0].text
+    assert "qfarm 帮助 <服务|账号|农田|好友|任务|自动化|种子|设置|主题|日志|推送|白名单>" in replies[0].text
     assert "qfarm 状态 [详细]" in replies[0].text
 
 
@@ -64,3 +66,25 @@ async def test_help_module_push_from_dispatch(tmp_path: Path):
     assert replies
     assert "【推送模块】" in replies[0].text
     assert "qfarm 推送 测试" in replies[0].text
+
+
+@pytest.mark.asyncio
+async def test_help_module_seed_from_dispatch(tmp_path: Path):
+    router = _build_router(tmp_path)
+
+    replies = await router._dispatch(event=object(), user_id="u1", tokens=["帮助", "种子"])
+
+    assert replies
+    assert "【种子模块】" in replies[0].text
+    assert "qfarm 种子 列表" in replies[0].text
+    assert "qfarm 设置 种子 <seedId>" in replies[0].text
+
+
+@pytest.mark.asyncio
+async def test_help_module_settings_contains_seed_list_hint(tmp_path: Path):
+    router = _build_router(tmp_path)
+
+    replies = await router._dispatch(event=object(), user_id="u1", tokens=["帮助", "设置"])
+
+    assert replies
+    assert "查看可用种子: qfarm 种子 列表" in replies[0].text

@@ -334,7 +334,13 @@ pip install -r requirements-dev.txt
 
 ## Version
 
-- Current release: v2.4.6
+- Current release: v2.4.7
+- 2026-02-25 v2.4.7
+- Reason: improve command discoverability by adding explicit seed lookup guidance in help outputs.
+- Change: `qfarm 帮助`模块索引新增“种子”入口；`qfarm 帮助 详细`模块列表补充“种子”；新增 `qfarm 帮助 种子` 模块文案；`qfarm 帮助 设置`补充“查看可用种子: qfarm 种子 列表”。
+- Impact: users can find seed-related commands from brief/module/verbose help views without changing any runtime behavior.
+- Risk: low; documentation-only behavior change with no protocol or command execution path modification.
+- Verification: `PYTHONPATH=d:\\botproject python -m pytest tests/test_command_router_help_simplified.py -q` passed (`5 passed`)；`PYTHONPATH=d:\\botproject python -m pytest tests -q` passed (`176 passed`).
 - 2026-02-25 v2.4.6
 - Reason: fix the user-visible reliability regression where auto-plant looked enabled but silently skipped, and reduce one-command multi-image spam in group chat.
 - Change: add bag-stock fallback seed selection when shop candidates are exhausted; enforce strict seed validation in `qfarm 设置 种子` (`locked/soldOut/unknownMeta` now blocked) and trigger immediate `plant` verification after saving; expose `lastFarm.plantTargetCount` diagnostics; only mark long replies for image rendering; fallback to plain text when render payload would paginate; remove repeated stats on non-first render pages.

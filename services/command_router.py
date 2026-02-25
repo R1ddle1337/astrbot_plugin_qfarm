@@ -1130,11 +1130,12 @@ class QFarmCommandRouter:
             "4) 好友 -> qfarm 帮助 好友\n"
             "5) 任务(日常) -> qfarm 帮助 任务\n"
             "6) 自动化 -> qfarm 帮助 自动化\n"
-            "7) 设置 -> qfarm 帮助 设置\n"
-            "8) 主题 -> qfarm 帮助 主题\n"
-            "9) 日志 -> qfarm 帮助 日志\n"
-            "10) 推送 -> qfarm 帮助 推送\n"
-            "11) 白名单 -> qfarm 帮助 白名单\n"
+            "7) 种子 -> qfarm 帮助 种子\n"
+            "8) 设置 -> qfarm 帮助 设置\n"
+            "9) 主题 -> qfarm 帮助 主题\n"
+            "10) 日志 -> qfarm 帮助 日志\n"
+            "11) 推送 -> qfarm 帮助 推送\n"
+            "12) 白名单 -> qfarm 帮助 白名单\n"
             "\n完整命令清单: qfarm 帮助 详细\n"
             "输出回看说明: 在 状态/日志/日常领取 命令后追加 “详细”"
         )
@@ -1143,7 +1144,7 @@ class QFarmCommandRouter:
         return (
             "qfarm 命令总览（详细）\n"
             "1) qfarm 帮助\n"
-            "2) qfarm 帮助 <服务|账号|农田|好友|任务|自动化|设置|主题|日志|推送|白名单>\n"
+            "2) qfarm 帮助 <服务|账号|农田|好友|任务|自动化|种子|设置|主题|日志|推送|白名单>\n"
             "3) qfarm 帮助 详细\n"
             "4) qfarm 服务 状态|启动|停止|重启 (超管)\n"
             "5) qfarm 账号 查看\n"
@@ -1204,6 +1205,7 @@ class QFarmCommandRouter:
             "好友": {"好友", "friend"},
             "任务": {"任务", "日常", "任务(日常)", "task", "daily"},
             "自动化": {"自动化", "automation", "auto"},
+            "种子": {"种子", "seed", "seeds"},
             "设置": {"设置", "setting", "settings"},
             "主题": {"主题", "theme"},
             "日志": {"日志", "log", "logs", "账号日志", "accountlogs", "account-logs"},
@@ -1265,11 +1267,19 @@ class QFarmCommandRouter:
                 "- qfarm 自动化 全开|全关\n"
                 "- 快捷: qfarm 全自动 [开|关]"
             )
+        if module_name == "种子":
+            return (
+                "【种子模块】\n"
+                "- qfarm 种子 列表\n"
+                "- qfarm 设置 种子 <seedId>\n"
+                "- 示例: qfarm 种子 列表"
+            )
         if module_name == "设置":
             return (
                 "【设置模块】\n"
                 "- qfarm 设置 策略 <preferred|level|max_exp|max_fert_exp|max_profit|max_fert_profit>\n"
                 "- qfarm 设置 种子 <seedId>\n"
+                "- 查看可用种子: qfarm 种子 列表\n"
                 "- qfarm 设置 间隔 农场|好友 <minSec> <maxSec>\n"
                 "- qfarm 设置 静默 <on|off> <HH:MM> <HH:MM>"
             )
