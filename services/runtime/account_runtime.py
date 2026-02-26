@@ -165,6 +165,7 @@ class AccountRuntime:
         self._last_seed_decision_reason = ""
         self._last_selected_seed_id = 0
         self._last_selected_seed_name = ""
+        self._last_gold_item_sync_at = 0.0
         self._daily_routines = self._normalize_daily_routines(self.settings.get("dailyRoutines"))
         self.heartbeat_fail_limit = max(
             1,
@@ -186,6 +187,7 @@ class AccountRuntime:
             ),
         )
         self._session_disconnect_bound = False
+        self._reconnect_attempt_seq = 0
 
     async def start(self) -> None:
         if self.running:
@@ -873,52 +875,120 @@ class AccountRuntime:
         code = str(self.account.get("code") or "").strip()
         if not code:
             raise RuntimeError("账号缺少绑定 code，code 可能失效，请重新扫码绑定")
-        if not self._session_disconnect_bound:
-            await self.session.on_disconnect(self._on_session_disconnect)
-            self._session_disconnect_bound = True
-        await self.session.start(code=code)
-        await self.session.notify_dispatcher.on("*", self._on_notify)
-        reply = await self.user.login(self.session_config.client_version)
-        if not reply.HasField("basic"):
-            raise RuntimeError("登录缺少 basic 字段")
-        basic = reply.basic
-        self.user_state["gid"] = _to_int(basic.gid)
-        self.user_state["name"] = str(basic.name or "")
-        self.user_state["level"] = _to_int(basic.level)
-        self.user_state["gold"] = _to_int(basic.gold)
-        self.user_state["exp"] = _to_int(basic.exp)
-        self.connected = True
-        self.login_ready = True
-        try:
-            bag = await self.warehouse.get_bag()
-            for item in self.warehouse.get_bag_items(bag):
-                if _to_int(item.id) == 1002:
-                    self.user_state["coupon"] = _to_int(item.count)
-                    break
-        except Exception:
-            pass
-        self.initial_state = {
-            "gold": _to_int(self.user_state["gold"]),
-            "exp": _to_int(self.user_state["exp"]),
-            "coupon": _to_int(self.user_state["coupon"]),
-            "ready": True,
-        }
-        if not self._invite_processed:
-            self._invite_processed = True
-            self._invite_task = asyncio.create_task(self._process_invite_codes_once())
-        self._reset_schedule()
-        asyncio.create_task(self.run_daily_routines(force=True))
-
-    async def _on_session_disconnect(self, reason: str) -> None:
-        self.connected = False
-        self.login_ready = False
+        phase = "session_start"
+        code_hint = self._mask_login_code(code)
+        started_ms = int(time.time() * 1000)
         self._debug_log(
             "session",
-            f"session disconnected: {reason}",
+            "connect/login begin",
+            module="system",
+            event="login_attempt",
+            result="start",
+            phase=phase,
+            codeHint=code_hint,
+        )
+        try:
+            if not self._session_disconnect_bound:
+                await self.session.on_disconnect(self._on_session_disconnect)
+                self._session_disconnect_bound = True
+            await self.session.start(code=code)
+            self._debug_log(
+                "session",
+                "session start ok",
+                module="system",
+                event="session_start_ok",
+                result="ok",
+                phase=phase,
+                codeHint=code_hint,
+            )
+            phase = "user_login"
+            await self.session.notify_dispatcher.on("*", self._on_notify)
+            reply = await self.user.login(self.session_config.client_version)
+            if not reply.HasField("basic"):
+                raise RuntimeError("登录缺少 basic 字段")
+            basic = reply.basic
+            self.user_state["gid"] = _to_int(basic.gid)
+            self.user_state["name"] = str(basic.name or "")
+            self.user_state["level"] = _to_int(basic.level)
+            self.user_state["gold"] = _to_int(basic.gold)
+            self.user_state["exp"] = _to_int(basic.exp)
+            self.connected = True
+            self.login_ready = True
+            self._reconnect_attempt_seq = 0
+            try:
+                bag = await self.warehouse.get_bag()
+                for item in self.warehouse.get_bag_items(bag):
+                    if _to_int(item.id) == 1002:
+                        self.user_state["coupon"] = _to_int(item.count)
+                        break
+            except Exception as e:
+                self._debug_log(
+                    "session",
+                    f"coupon sync failed: {e}",
+                    module="system",
+                    event="coupon_sync_failed",
+                )
+            self.initial_state = {
+                "gold": _to_int(self.user_state["gold"]),
+                "exp": _to_int(self.user_state["exp"]),
+                "coupon": _to_int(self.user_state["coupon"]),
+                "ready": True,
+            }
+            self._debug_log(
+                "session",
+                (
+                    f"login ready: gid={_to_int(self.user_state['gid'])}, "
+                    f"name={str(self.user_state['name'] or '')}, "
+                    f"level={_to_int(self.user_state['level'])}"
+                ),
+                module="system",
+                event="login_ready",
+                result="ok",
+                phase=phase,
+                elapsedMs=max(0, int(time.time() * 1000) - started_ms),
+            )
+            if not self._invite_processed:
+                self._invite_processed = True
+                self._invite_task = asyncio.create_task(self._process_invite_codes_once())
+            self._reset_schedule()
+            asyncio.create_task(self.run_daily_routines(force=True))
+        except Exception as e:
+            self.connected = False
+            self.login_ready = False
+            error_text = str(e or "")
+            error_code = self._classify_login_error(error_text)
+            self._debug_log(
+                "session",
+                f"connect/login failed at {phase}: {error_text}",
+                is_warn=True,
+                module="system",
+                event="login_failed",
+                result="error",
+                phase=phase,
+                errorCode=error_code,
+                rebindSuggested=self._should_rebind_after_login_error(error_code),
+                codeHint=code_hint,
+                elapsedMs=max(0, int(time.time() * 1000) - started_ms),
+            )
+            raise
+
+    async def _on_session_disconnect(self, reason: str) -> None:
+        was_connected = bool(self.connected)
+        was_login_ready = bool(self.login_ready)
+        self.connected = False
+        self.login_ready = False
+        reason_text = str(reason or "")
+        self._debug_log(
+            "session",
+            f"session disconnected: {reason_text}",
+            is_warn=True,
             module="system",
             event="session_disconnected",
             result="error",
-            reason=str(reason or ""),
+            reason=reason_text,
+            errorCode=self._classify_login_error(reason_text),
+            wasConnected=was_connected,
+            wasLoginReady=was_login_ready,
         )
 
     async def _heartbeat_loop(self) -> None:
@@ -938,6 +1008,7 @@ class AccountRuntime:
                         self._debug_log(
                             "heartbeat",
                             f"heartbeat fail limit reached ({fail_streak}/{fail_limit}), mark offline: session disconnected",
+                            is_warn=True,
                             module="system",
                             event="heartbeat_fail_limit",
                             result="error",
@@ -955,29 +1026,41 @@ class AccountRuntime:
             except asyncio.CancelledError:
                 return
             except Exception as e:
+                error_text = str(e or "")
+                error_code = self._classify_login_error(error_text)
                 fail_limit = max(1, _to_int(getattr(self, "heartbeat_fail_limit", 3), 3))
+                session_connected = bool(getattr(self.session, "connected", False))
+                effective_limit = fail_limit
+                if error_code == "rpc_timeout" and session_connected:
+                    effective_limit = max(fail_limit, 6)
                 fail_streak += 1
                 self._debug_log(
                     "heartbeat",
-                    f"heartbeat failed ({fail_streak}/{fail_limit}): {e}",
+                    f"heartbeat failed ({fail_streak}/{effective_limit}): {error_text}",
+                    is_warn=True,
                     module="system",
                     event="heartbeat_error",
                     result="error",
                     streak=fail_streak,
                     limit=fail_limit,
+                    effectiveLimit=effective_limit,
+                    errorCode=error_code,
                 )
-                if fail_streak < fail_limit:
+                if fail_streak < effective_limit:
                     continue
                 self.connected = False
                 self.login_ready = False
                 self._debug_log(
                     "heartbeat",
-                    f"heartbeat fail limit reached ({fail_streak}/{fail_limit}), mark offline and reconnect",
+                    f"heartbeat fail limit reached ({fail_streak}/{effective_limit}), mark offline and reconnect",
+                    is_warn=True,
                     module="system",
                     event="heartbeat_fail_limit",
                     result="error",
                     streak=fail_streak,
                     limit=fail_limit,
+                    effectiveLimit=effective_limit,
+                    errorCode=error_code,
                 )
                 try:
                     await self.session.stop()
@@ -990,23 +1073,58 @@ class AccountRuntime:
         farm_error_backoff = 5.0
         friend_error_backoff_base = max(1.0, _to_float(getattr(self, "friend_error_backoff_sec", 10.0), 10.0))
         friend_error_backoff = friend_error_backoff_base
+        reconnect_attempt = 0
         while self.running:
             try:
                 session_connected = bool(getattr(self.session, "connected", False))
                 if not self.login_ready or not self.connected or not session_connected:
+                    reconnect_attempt += 1
+                    self._reconnect_attempt_seq = reconnect_attempt
+                    offline_reason = self._resolve_offline_reason(session_connected=session_connected)
+                    self._debug_log(
+                        "scheduler",
+                        (
+                            f"reconnect attempt #{reconnect_attempt}, "
+                            f"offlineReason={offline_reason}, backoff={backoff:.1f}s"
+                        ),
+                        module="system",
+                        event="reconnect_attempt",
+                        result="start",
+                        attempt=reconnect_attempt,
+                        offlineReason=offline_reason,
+                        backoffSec=backoff,
+                    )
                     self.connected = False
                     self.login_ready = False
                     try:
                         await self._connect_and_login()
-                        backoff = 1.0
-                    except Exception as e:
                         self._debug_log(
                             "scheduler",
-                            f"reconnect failed, backoff={backoff:.1f}s: {e}",
+                            f"reconnect success after {reconnect_attempt} attempt(s)",
+                            module="system",
+                            event="reconnect_ok",
+                            result="ok",
+                            attempts=reconnect_attempt,
+                        )
+                        reconnect_attempt = 0
+                        self._reconnect_attempt_seq = 0
+                        backoff = 1.0
+                    except Exception as e:
+                        error_text = str(e or "")
+                        error_code = self._classify_login_error(error_text)
+                        code_hint = self._mask_login_code(str(self.account.get("code") or ""))
+                        self._debug_log(
+                            "scheduler",
+                            f"reconnect failed, backoff={backoff:.1f}s: {error_text}",
+                            is_warn=True,
                             module="system",
                             event="reconnect_error",
                             result="error",
+                            attempt=reconnect_attempt,
                             backoffSec=backoff,
+                            errorCode=error_code,
+                            rebindSuggested=self._should_rebind_after_login_error(error_code),
+                            codeHint=code_hint,
                         )
                         await asyncio.sleep(backoff)
                         backoff = min(30.0, backoff * 2)
@@ -2037,6 +2155,8 @@ class AccountRuntime:
                     old = _to_int(self.user_state["gold"])
                     self.user_state["gold"] = count if count > 0 else max(0, old + delta)
                     self.last_gain["gold"] = max(0, _to_int(self.user_state["gold"]) - old)
+                    if _to_int(self.user_state["gold"]) != old:
+                        self._last_gold_item_sync_at = time.time()
                 elif item_id == 1002:
                     old = _to_int(self.user_state["coupon"])
                     self.user_state["coupon"] = count if count > 0 else max(0, old + delta)
@@ -2071,7 +2191,31 @@ class AccountRuntime:
                             keepLevel=current_level,
                         )
                 if present_fields is not None and 5 in present_fields and _to_int(basic.gold, -1) >= 0:
-                    self.user_state["gold"] = _to_int(basic.gold)
+                    next_gold = _to_int(basic.gold)
+                    current_gold = _to_int(self.user_state.get("gold"), 0)
+                    initial_state = getattr(self, "initial_state", {})
+                    if not isinstance(initial_state, dict):
+                        initial_state = {}
+                    initial_ready = bool(initial_state.get("ready"))
+                    last_item_sync_at = _to_float(getattr(self, "_last_gold_item_sync_at", 0.0), 0.0)
+                    should_ignore_zero = (
+                        initial_ready
+                        and next_gold == 0
+                        and current_gold > 0
+                        and (time.time() - last_item_sync_at) > 3.0
+                    )
+                    if should_ignore_zero:
+                        self._debug_log(
+                            "farm",
+                            f"ignore suspicious basic gold reset: keep={current_gold}, recv={next_gold}",
+                            module="farm",
+                            event="basic_gold_zero_ignored",
+                            keepGold=current_gold,
+                            recvGold=next_gold,
+                            lastItemSyncAt=last_item_sync_at,
+                        )
+                    else:
+                        self.user_state["gold"] = next_gold
                 if present_fields is not None and 4 in present_fields and _to_int(basic.exp, -1) >= 0:
                     self.user_state["exp"] = _to_int(basic.exp)
             return
@@ -2156,6 +2300,7 @@ class AccountRuntime:
         return rows
 
     def _debug_log(self, tag: str, message: str, **meta: Any) -> None:
+        is_warn = bool(meta.pop("is_warn", False))
         if self.logger and hasattr(self.logger, "debug"):
             try:
                 self.logger.debug(f"[qfarm-runtime] [{tag}] {message}")
@@ -2167,11 +2312,57 @@ class AccountRuntime:
                     str((self.account or {}).get("id") or ""),
                     str(tag or ""),
                     str(message or ""),
-                    False,
+                    is_warn,
                     meta,
                 )
             except Exception:
                 pass
+
+    @staticmethod
+    def _mask_login_code(code: str) -> str:
+        text = str(code or "").strip()
+        if not text:
+            return ""
+        tail_len = min(4, len(text))
+        tail = text[-tail_len:]
+        return f"len={len(text)},tail={tail}"
+
+    @staticmethod
+    def _classify_login_error(error: str) -> str:
+        raw = str(error or "").strip()
+        text = raw.lower()
+        if not raw:
+            return "unknown"
+        if "missing login code" in text or "code 不能为空" in text or "code 涓嶈兘涓虹┖" in text:
+            return "missing_code"
+        if "网关鉴权失败" in raw and "400" in raw:
+            return "ws_auth_400"
+        if "登录凭据可能已失效" in raw:
+            return "ws_auth_400"
+        if "invalid response status" in text and "400" in text:
+            return "ws_auth_400"
+        if ".login error=" in text or "userservice.login error=" in text:
+            return "login_rpc_error"
+        if "request timeout" in text or "timeout" in text or "timed out" in text:
+            return "rpc_timeout"
+        if "kickout" in text or "被踢" in text:
+            return "kickout"
+        if "websocket" in text or "ws" in text or "disconnected" in text:
+            return "ws_disconnected"
+        return "unknown"
+
+    @staticmethod
+    def _should_rebind_after_login_error(error_code: str) -> bool:
+        return str(error_code or "").strip().lower() in {"missing_code", "ws_auth_400", "login_rpc_error", "kickout"}
+
+    def _resolve_offline_reason(self, *, session_connected: bool) -> str:
+        if not bool(self.login_ready):
+            return "login_not_ready"
+        if not bool(self.connected):
+            return "runtime_disconnected"
+        if not bool(session_connected):
+            return "session_socket_closed"
+        return "unknown"
 
     async def _process_invite_codes_once(self) -> None:
         try:

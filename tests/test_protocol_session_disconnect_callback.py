@@ -16,10 +16,11 @@ class _FakeMsg:
 
 
 class _FakeWS:
-    def __init__(self, messages: list[_FakeMsg], delay_sec: float = 0.0) -> None:
+    def __init__(self, messages: list[_FakeMsg], delay_sec: float = 0.0, close_code: int = 1000) -> None:
         self._messages = list(messages)
         self._delay_sec = delay_sec
         self.closed = False
+        self.close_code = int(close_code)
 
     def __aiter__(self):
         return self
@@ -41,6 +42,7 @@ class _FakeWS:
 class _FakeClientSession:
     ws_messages: list[_FakeMsg] = []
     ws_delay_sec: float = 0.0
+    ws_close_code: int = 1000
 
     def __init__(self, *_, headers=None, **__):
         self.headers = headers or {}
@@ -48,7 +50,11 @@ class _FakeClientSession:
         self.ws: _FakeWS | None = None
 
     async def ws_connect(self, _url: str, **_kwargs):
-        self.ws = _FakeWS(_FakeClientSession.ws_messages, delay_sec=_FakeClientSession.ws_delay_sec)
+        self.ws = _FakeWS(
+            _FakeClientSession.ws_messages,
+            delay_sec=_FakeClientSession.ws_delay_sec,
+            close_code=_FakeClientSession.ws_close_code,
+        )
         return self.ws
 
     async def close(self) -> None:
@@ -59,6 +65,7 @@ class _FakeClientSession:
 def patch_client_session(monkeypatch: pytest.MonkeyPatch):
     _FakeClientSession.ws_messages = []
     _FakeClientSession.ws_delay_sec = 0.0
+    _FakeClientSession.ws_close_code = 1000
     monkeypatch.setattr(session_module.aiohttp, "ClientSession", _FakeClientSession)
 
 
@@ -79,6 +86,7 @@ async def test_disconnect_callback_called_on_recv_disconnect():
         _FakeMsg(aiohttp.WSMsgType.CLOSED, b""),
     ]
     _FakeClientSession.ws_delay_sec = 0.02
+    _FakeClientSession.ws_close_code = 1006
 
     session = _build_session()
     reasons: list[str] = []
@@ -92,6 +100,7 @@ async def test_disconnect_callback_called_on_recv_disconnect():
 
     assert reasons, "disconnect callback should be called"
     assert "websocket" in reasons[0].lower()
+    assert "1006" in reasons[0]
 
     await session.stop()
     assert len(reasons) == 1

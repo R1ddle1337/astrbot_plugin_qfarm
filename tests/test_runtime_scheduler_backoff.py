@@ -135,6 +135,69 @@ async def test_scheduler_reconnects_immediately_when_session_disconnected(monkey
 
 
 @pytest.mark.asyncio
+async def test_scheduler_reconnect_error_log_contains_code_hint(monkeypatch: pytest.MonkeyPatch):
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.running = True
+    runtime.login_ready = False
+    runtime.connected = False
+    runtime.account = {"code": "abcd1234efgh5678"}
+    runtime.session = _SessionStub(connected=False)
+    logs: list[dict[str, object]] = []
+
+    def _capture_log(_tag: str, _message: str, **meta: object) -> None:
+        logs.append(dict(meta))
+
+    async def _connect() -> None:
+        raise RuntimeError("websocket connect failed: invalid response status 400")
+
+    async def _fast_sleep(_: float) -> None:
+        runtime.running = False
+        return
+
+    runtime._debug_log = _capture_log  # type: ignore[method-assign]
+    runtime._connect_and_login = _connect  # type: ignore[method-assign]
+    monkeypatch.setattr(account_runtime_module.asyncio, "sleep", _fast_sleep)
+
+    await runtime._scheduler_loop()
+
+    reconnect_logs = [row for row in logs if row.get("event") == "reconnect_error"]
+    assert reconnect_logs
+    assert reconnect_logs[-1].get("codeHint") == "len=16,tail=5678"
+
+
+@pytest.mark.asyncio
+async def test_scheduler_reconnect_error_chinese_400_marks_rebind_suggested(monkeypatch: pytest.MonkeyPatch):
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.running = True
+    runtime.login_ready = False
+    runtime.connected = False
+    runtime.account = {"code": "abcd1234efgh5678"}
+    runtime.session = _SessionStub(connected=False)
+    logs: list[dict[str, object]] = []
+
+    def _capture_log(_tag: str, _message: str, **meta: object) -> None:
+        logs.append(dict(meta))
+
+    async def _connect() -> None:
+        raise RuntimeError("websocket connect failed: 网关鉴权失败(HTTP 400)，登录凭据可能已失效")
+
+    async def _fast_sleep(_: float) -> None:
+        runtime.running = False
+        return
+
+    runtime._debug_log = _capture_log  # type: ignore[method-assign]
+    runtime._connect_and_login = _connect  # type: ignore[method-assign]
+    monkeypatch.setattr(account_runtime_module.asyncio, "sleep", _fast_sleep)
+
+    await runtime._scheduler_loop()
+
+    reconnect_logs = [row for row in logs if row.get("event") == "reconnect_error"]
+    assert reconnect_logs
+    assert reconnect_logs[-1].get("errorCode") == "ws_auth_400"
+    assert reconnect_logs[-1].get("rebindSuggested") is True
+
+
+@pytest.mark.asyncio
 async def test_heartbeat_marks_offline_after_fail_limit(monkeypatch: pytest.MonkeyPatch):
     runtime = AccountRuntime.__new__(AccountRuntime)
     runtime.running = True
@@ -169,6 +232,42 @@ async def test_heartbeat_marks_offline_after_fail_limit(monkeypatch: pytest.Monk
     runtime.session.stop.assert_awaited_once()
     assert runtime.connected is False
     assert runtime.login_ready is False
+
+
+@pytest.mark.asyncio
+async def test_heartbeat_timeout_is_tolerated_before_effective_limit(monkeypatch: pytest.MonkeyPatch):
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.running = True
+    runtime.login_ready = True
+    runtime.connected = True
+    runtime.heartbeat_interval_sec = 1
+    runtime.heartbeat_fail_limit = 2
+    runtime.user_state = {"gid": 10001}
+    runtime.session_config = _SessionConfigStub(client_version="1.0.0-test")
+    runtime._debug_log = lambda *args, **kwargs: None
+
+    runtime.user = _UserStub(
+        heartbeat=AsyncMock(side_effect=RuntimeError("request timeout: gamepb.userpb.UserService.Heartbeat"))
+    )
+    runtime.session = _SessionStub(connected=True)
+    runtime.session.stop = AsyncMock()
+
+    sleep_ticks = {"count": 0}
+
+    async def _fast_sleep(_: float) -> None:
+        sleep_ticks["count"] += 1
+        if sleep_ticks["count"] >= 5:
+            runtime.running = False
+        return
+
+    monkeypatch.setattr(account_runtime_module.asyncio, "sleep", _fast_sleep)
+
+    await runtime._heartbeat_loop()
+
+    assert runtime.user.heartbeat.await_count == 5
+    runtime.session.stop.assert_not_called()
+    assert runtime.connected is True
+    assert runtime.login_ready is True
 
 
 async def _noop(*_: object, **__: object) -> dict[str, object]:

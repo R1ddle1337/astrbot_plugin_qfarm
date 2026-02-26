@@ -159,16 +159,26 @@ class GatewaySession:
                         self._log_warning(f"decode binary message failed: {e}")
                         continue
                 elif msg.type in {aiohttp.WSMsgType.CLOSE, aiohttp.WSMsgType.CLOSED}:
+                    close_code = getattr(ws, "close_code", None)
+                    disconnect_reason = f"websocket disconnected (close code={close_code})"
                     break
                 elif msg.type == aiohttp.WSMsgType.ERROR:
-                    disconnect_reason = "websocket receive error"
+                    ws_error = None
+                    try:
+                        ws_error = ws.exception() if hasattr(ws, "exception") else None
+                    except Exception:
+                        ws_error = None
+                    if ws_error:
+                        disconnect_reason = f"websocket disconnected (receive error: {ws_error})"
+                    else:
+                        disconnect_reason = "websocket disconnected (receive error)"
                     break
         except Exception as e:
-            disconnect_reason = f"websocket recv loop error: {e}"
+            disconnect_reason = f"websocket disconnected (recv loop error: {e})"
             self._log_warning(f"websocket recv loop error: {e}")
         finally:
             should_notify = not self._closed
-            await self._fail_all_pending("websocket disconnected")
+            await self._fail_all_pending(disconnect_reason)
             if should_notify:
                 await self._emit_disconnect(disconnect_reason)
                 await self._close_from_recv_loop()

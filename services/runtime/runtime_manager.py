@@ -268,6 +268,10 @@ class QFarmRuntimeManager:
         self._state_lock = asyncio.Lock()
         self._runtime_status_lock = asyncio.Lock()
         self._start_locks: dict[str, asyncio.Lock] = {}
+        self._runtime_fault_tasks: set[asyncio.Task] = set()
+        self._rebind_hold_accounts: set[str] = set()
+        self._rebind_hold_lock = asyncio.Lock()
+        self._rebind_hold_tasks: dict[str, asyncio.Task] = {}
         self._push_semaphore = asyncio.Semaphore(max(1, _to_int(base_push.get("maxConcurrency"), 8)))
         self._push_rate_lock = asyncio.Lock()
         self._push_rate_windows: dict[str, deque[float]] = {}
@@ -459,6 +463,7 @@ class QFarmRuntimeManager:
         account_id_text = str(account_id or "").strip()
         if not account_id_text:
             raise RuntimeError("account_id 不能为空")
+        await self._clear_rebind_hold_state(account_id_text, clear_status_error=True)
         lock = self._start_locks.setdefault(account_id_text, asyncio.Lock())
         async with lock:
             if account_id_text in self._runtimes:
@@ -580,6 +585,7 @@ class QFarmRuntimeManager:
 
     async def stop_account(self, account_id: str | int) -> None:
         account_id_text = str(account_id or "").strip()
+        await self._clear_rebind_hold_state(account_id_text, clear_status_error=False)
         runtime = self._runtimes.get(account_id_text)
         if not runtime:
             await self._set_runtime_status(account_id_text, runtimeState="stopped")
@@ -1483,6 +1489,10 @@ class QFarmRuntimeManager:
             "lastStartAt": _to_int(row.get("lastStartAt"), 0),
             "lastStartSuccessAt": _to_int(row.get("lastStartSuccessAt"), 0),
             "startRetryCount": _to_int(row.get("startRetryCount"), 0),
+            "currentCodeHint": self._account_code_hint(str(account_id)),
+            "lastHoldSourceCodeHint": str(row.get("lastHoldSourceCodeHint") or ""),
+            "lastHoldCurrentCodeHint": str(row.get("lastHoldCurrentCodeHint") or ""),
+            "lastHoldAt": _to_int(row.get("lastHoldAt"), 0),
         }
 
     async def _set_runtime_status(self, account_id: str, **patch: Any) -> None:
@@ -1574,10 +1584,197 @@ class QFarmRuntimeManager:
                 self._global_logs = self._global_logs[-self.runtime_log_max_entries :]
             self._schedule_runtime_logs_persist_locked()
         try:
+            if self._should_hold_runtime_for_rebind(entry):
+                self._schedule_rebind_hold(entry)
+        except Exception:
+            pass
+        try:
             if self._should_auto_push_entry(entry):
                 self._schedule_auto_push(entry)
         except Exception:
             return
+
+    def _account_code_hint(self, account_id: str) -> str:
+        account = self._find_account(str(account_id or "").strip())
+        if not account:
+            return ""
+        code = str(account.get("code") or "").strip()
+        if not code:
+            return ""
+        tail = code[-4:] if len(code) >= 4 else code
+        return f"len={len(code)},tail={tail}"
+
+    @staticmethod
+    def _is_rebind_hold_error(message: str) -> bool:
+        text = str(message or "").strip()
+        if not text:
+            return False
+        lowered = text.lower()
+        if "rebind" in lowered:
+            return True
+        if "已停止自动重连" in text:
+            return True
+        if "重新扫码绑定" in text and ("登录凭据" in text or "鉴权" in text or "code" in lowered):
+            return True
+        return False
+
+    async def _clear_rebind_hold_state(self, account_id: str, *, clear_status_error: bool) -> None:
+        account_id_text = str(account_id or "").strip()
+        if not account_id_text:
+            return
+
+        hold_task: asyncio.Task | None = None
+        async with self._rebind_hold_lock:
+            self._rebind_hold_accounts.discard(account_id_text)
+            hold_task = self._rebind_hold_tasks.pop(account_id_text, None)
+
+        if hold_task is not None:
+            self._runtime_fault_tasks.discard(hold_task)
+            if not hold_task.done():
+                hold_task.cancel()
+                try:
+                    await hold_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+
+        if not clear_status_error:
+            return
+
+        async with self._runtime_status_lock:
+            status_map = self._runtime_data.get("status")
+            if not isinstance(status_map, dict):
+                return
+            row = status_map.get(account_id_text)
+            if not isinstance(row, dict):
+                return
+            last_error = str(row.get("lastStartError") or "")
+            if not self._is_rebind_hold_error(last_error):
+                return
+            row = dict(row)
+            row["lastStartError"] = ""
+            if str(row.get("runtimeState") or "") == "failed":
+                row["runtimeState"] = "stopped"
+            status_map[account_id_text] = row
+            self._save_json_atomic(self.runtime_path, self._runtime_data)
+
+    @staticmethod
+    def _should_hold_runtime_for_rebind(entry: dict[str, Any]) -> bool:
+        if not isinstance(entry, dict):
+            return False
+        account_id = str(entry.get("accountId") or "").strip()
+        if not account_id:
+            return False
+        meta = entry.get("meta", {})
+        if not isinstance(meta, dict):
+            return False
+        if str(meta.get("module") or "").strip() != "system":
+            return False
+        event = str(meta.get("event") or "").strip()
+        if event not in {"login_failed", "reconnect_error"}:
+            return False
+        return bool(meta.get("rebindSuggested"))
+
+    def _schedule_rebind_hold(self, entry: dict[str, Any]) -> None:
+        account_id = str(entry.get("accountId") or "").strip()
+        if not account_id:
+            return
+        running = self._rebind_hold_tasks.get(account_id)
+        if running is not None and not running.done():
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._hold_runtime_for_rebind(dict(entry)))
+        self._rebind_hold_tasks[account_id] = task
+        self._runtime_fault_tasks.add(task)
+
+        def _cleanup(done_task: asyncio.Task, *, account_key: str = account_id) -> None:
+            self._runtime_fault_tasks.discard(done_task)
+            current = self._rebind_hold_tasks.get(account_key)
+            if current is done_task:
+                self._rebind_hold_tasks.pop(account_key, None)
+
+        task.add_done_callback(_cleanup)
+
+    async def _hold_runtime_for_rebind(self, entry: dict[str, Any]) -> None:
+        account_id = str(entry.get("accountId") or "").strip()
+        if not account_id:
+            return
+        meta = dict(entry.get("meta", {}) if isinstance(entry.get("meta"), dict) else {})
+        event = str(meta.get("event") or "").strip() or "reconnect_error"
+        reason = str(entry.get("msg") or "").strip()
+        error_code = str(meta.get("errorCode") or "").strip()
+        trigger_code_hint = str(meta.get("codeHint") or "").strip()
+        current_code_hint = self._account_code_hint(account_id)
+        if trigger_code_hint and current_code_hint and trigger_code_hint != current_code_hint:
+            self._on_runtime_log(
+                account_id,
+                "system",
+                "skip stale rebind hold due to code mismatch",
+                False,
+                {
+                    "module": "system",
+                    "event": "rebind_hold_skip_stale",
+                    "result": "ignore",
+                    "accountId": account_id,
+                    "triggerEvent": event,
+                    "triggerCodeHint": trigger_code_hint,
+                    "currentCodeHint": current_code_hint,
+                },
+            )
+            return
+
+        async with self._rebind_hold_lock:
+            if account_id in self._rebind_hold_accounts:
+                return
+            self._rebind_hold_accounts.add(account_id)
+
+        runtime = self._runtimes.get(account_id)
+        if runtime:
+            try:
+                await runtime.stop()
+            except Exception:
+                pass
+            finally:
+                self._runtimes.pop(account_id, None)
+
+        reason_text = reason or "登录凭据可能已失效"
+        hold_message = f"{reason_text}，已停止自动重连，请重新扫码绑定。"
+        await self._set_runtime_status(
+            account_id,
+            runtimeState="failed",
+            lastStartError=hold_message,
+            lastHoldSourceCodeHint=trigger_code_hint,
+            lastHoldCurrentCodeHint=current_code_hint,
+            lastHoldAt=int(time.time() * 1000),
+        )
+        self._add_account_log(
+            "rebind_required_hold",
+            hold_message,
+            account_id,
+            "",
+            event=event,
+            errorCode=error_code,
+        )
+        self._on_runtime_log(
+            account_id,
+            "system",
+            hold_message,
+            True,
+            {
+                "module": "system",
+                "event": "rebind_required_hold",
+                "result": "error",
+                "accountId": account_id,
+                "triggerEvent": event,
+                "errorCode": error_code,
+                "triggerCodeHint": trigger_code_hint,
+                "currentCodeHint": current_code_hint,
+            },
+        )
 
     async def _on_runtime_kicked(self, account_id: str, reason: str) -> None:
         account_id_text = str(account_id or "").strip()

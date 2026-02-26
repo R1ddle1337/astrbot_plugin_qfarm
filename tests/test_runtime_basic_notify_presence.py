@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from astrbot_plugin_qfarm.services.protocol.proto import userpb_pb2
@@ -45,3 +47,37 @@ async def test_basic_notify_explicit_zero_fields_are_applied():
     assert runtime.user_state["level"] == 9
     assert runtime.user_state["gold"] == 0
     assert runtime.user_state["exp"] == 0
+
+
+@pytest.mark.asyncio
+async def test_basic_notify_zero_gold_is_ignored_when_no_recent_item_sync():
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.account = {"id": "acc-1"}
+    runtime.logger = None
+    runtime.log_callback = None
+    runtime.user_state = {"level": 10, "gold": 108614, "exp": 16799}
+    runtime.initial_state = {"gold": 108614, "exp": 16799, "coupon": 69, "ready": True}
+    runtime._last_gold_item_sync_at = 0.0
+
+    payload = b"\x0a\x08\x18\x0a\x20\x9f\x83\x01\x28\x00"
+    # 上面 payload 对应 BasicInfo(level=10, exp=16799, gold=0)
+    await runtime._on_notify("BasicNotify", payload)
+
+    assert runtime.user_state["gold"] == 108614
+    assert runtime.user_state["exp"] == 16799
+
+
+@pytest.mark.asyncio
+async def test_basic_notify_zero_gold_applies_when_recent_item_sync_exists():
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    runtime.account = {"id": "acc-1"}
+    runtime.logger = None
+    runtime.log_callback = None
+    runtime.user_state = {"level": 10, "gold": 108614, "exp": 16799}
+    runtime.initial_state = {"gold": 108614, "exp": 16799, "coupon": 69, "ready": True}
+    runtime._last_gold_item_sync_at = time.time()
+
+    payload = b"\x0a\x08\x18\x0a\x20\x9f\x83\x01\x28\x00"
+    await runtime._on_notify("BasicNotify", payload)
+
+    assert runtime.user_state["gold"] == 0

@@ -1856,6 +1856,12 @@ class QFarmCommandRouter:
             f"下次好友巡查: {next_checks.get('friendRemainSec', '--')}s",
             f"经验进度: {exp_progress.get('current', 0)}/{exp_progress.get('needed', 0)}",
         ]
+        current_code_hint = str(data.get("currentCodeHint") or "").strip() if isinstance(data, dict) else ""
+        hold_source_code_hint = str(data.get("lastHoldSourceCodeHint") or "").strip() if isinstance(data, dict) else ""
+        if current_code_hint:
+            lines.append(f"当前codeHint: {current_code_hint}")
+        if hold_source_code_hint:
+            lines.append(f"最近hold来源codeHint: {hold_source_code_hint}")
         if auto_snapshot:
             lines.append(f"自动化: {auto_snapshot}")
         session_coupon_gained = self._safe_int(data.get("sessionCouponGained"), 0)

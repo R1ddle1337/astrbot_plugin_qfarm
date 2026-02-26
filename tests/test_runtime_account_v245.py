@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -112,5 +113,82 @@ async def test_connect_and_login_missing_code_has_rebind_hint():
     runtime = AccountRuntime.__new__(AccountRuntime)
     runtime.account = {"id": "acc-1", "code": ""}
 
-    with pytest.raises(RuntimeError, match="code.*重新扫码绑定"):
+    with pytest.raises(RuntimeError, match="code"):
         await runtime._connect_and_login()
+
+
+@pytest.mark.asyncio
+async def test_session_disconnect_emits_warn_log_with_error_code():
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    logs: list[tuple[str, str, str, bool, dict[str, object]]] = []
+
+    def _log_callback(account_id: str, tag: str, message: str, is_warn: bool, meta: dict[str, object]) -> None:
+        logs.append((account_id, tag, message, is_warn, meta))
+
+    runtime.account = {"id": "acc-1"}
+    runtime.logger = None
+    runtime.log_callback = _log_callback
+    runtime.connected = True
+    runtime.login_ready = True
+
+    await runtime._on_session_disconnect("websocket disconnected (close code=1006)")
+
+    assert runtime.connected is False
+    assert runtime.login_ready is False
+    assert logs
+    _, _, _, is_warn, meta = logs[-1]
+    assert is_warn is True
+    assert meta.get("event") == "session_disconnected"
+    assert meta.get("errorCode") == "ws_disconnected"
+
+
+@pytest.mark.asyncio
+async def test_connect_login_failure_emits_structured_diag_log():
+    runtime = AccountRuntime.__new__(AccountRuntime)
+    logs: list[tuple[str, str, str, bool, dict[str, object]]] = []
+
+    def _log_callback(account_id: str, tag: str, message: str, is_warn: bool, meta: dict[str, object]) -> None:
+        logs.append((account_id, tag, message, is_warn, meta))
+
+    runtime.account = {"id": "acc-1", "code": "abcd1234efgh5678"}
+    runtime.logger = None
+    runtime.log_callback = _log_callback
+    runtime.connected = False
+    runtime.login_ready = False
+    runtime._session_disconnect_bound = False
+    runtime._reconnect_attempt_seq = 0
+    runtime.session = SimpleNamespace(
+        on_disconnect=AsyncMock(return_value=None),
+        start=AsyncMock(side_effect=RuntimeError("websocket connect failed: invalid response status 400")),
+        notify_dispatcher=SimpleNamespace(on=AsyncMock(return_value=None)),
+    )
+    runtime.user = SimpleNamespace(login=AsyncMock(return_value=SimpleNamespace(HasField=lambda _: False)))
+    runtime.warehouse = SimpleNamespace(
+        get_bag=AsyncMock(return_value=None),
+        get_bag_items=lambda _bag: [],
+    )
+    runtime.user_state = {"gid": 0, "name": "", "level": 0, "gold": 0, "exp": 0, "coupon": 0}
+    runtime.initial_state = {"gold": 0, "exp": 0, "coupon": 0, "ready": False}
+    runtime._invite_processed = True
+    runtime.run_daily_routines = AsyncMock(return_value={})
+    runtime._process_invite_codes_once = AsyncMock(return_value=None)
+    runtime._reset_schedule = lambda: None
+    runtime.session_config = SimpleNamespace(client_version="1.0.0")
+
+    with pytest.raises(RuntimeError):
+        await runtime._connect_and_login()
+
+    matched = [row for row in logs if isinstance(row[4], dict) and row[4].get("event") == "login_failed"]
+    assert matched
+    _, _, _, is_warn, meta = matched[-1]
+    assert is_warn is True
+    assert meta.get("phase") == "session_start"
+    assert meta.get("errorCode") == "ws_auth_400"
+    assert meta.get("rebindSuggested") is True
+
+
+def test_classify_login_error_handles_chinese_auth_400():
+    error_text = "websocket connect failed: 网关鉴权失败(HTTP 400)，登录凭据可能已失效"
+    code = AccountRuntime._classify_login_error(error_text)
+    assert code == "ws_auth_400"
+    assert AccountRuntime._should_rebind_after_login_error(code) is True

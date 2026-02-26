@@ -96,6 +96,21 @@ async def test_status_verbose_keeps_extended_fields(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_status_verbose_shows_code_hint_diagnostics(tmp_path: Path):
+    status_payload = _default_status_payload()
+    status_payload["currentCodeHint"] = "len=32,tail=9aea"
+    status_payload["lastHoldSourceCodeHint"] = "len=32,tail=1cae"
+    router = _build_router(tmp_path, status_payload=status_payload)
+
+    replies = await router._cmd_status("u1", ["详细"])
+
+    assert replies
+    text = replies[0].text
+    assert "当前codeHint: len=32,tail=9aea" in text
+    assert "最近hold来源codeHint: len=32,tail=1cae" in text
+
+
+@pytest.mark.asyncio
 async def test_status_verbose_remain_zero_shows_slot_waiting_message(tmp_path: Path):
     status_payload = _default_status_payload()
     status_payload["nextChecks"] = {"farmRemainSec": 0, "friendRemainSec": 30}
